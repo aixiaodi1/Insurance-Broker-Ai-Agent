@@ -1,7 +1,8 @@
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Iterator
 from uuid import uuid4
 
 from app.domain import DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus
@@ -13,7 +14,7 @@ class SQLiteRepository:
         self.database_path = Path(database_url.removeprefix("sqlite:///"))
 
     def initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS documents (
@@ -75,7 +76,7 @@ class SQLiteRepository:
     ) -> DocumentRecord:
         document_id = f"doc_{uuid4().hex}"
         created_at = self._now()
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO documents (
@@ -104,14 +105,14 @@ class SQLiteRepository:
         return self.get_document(document_id)
 
     def get_document(self, document_id: str) -> DocumentRecord:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if row is None:
             raise KeyError(f"Document not found: {document_id}")
         return self._document_from_row(row)
 
     def list_documents(self, collection: str | None = None) -> list[DocumentRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             if collection is None:
                 rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
             else:
@@ -122,14 +123,14 @@ class SQLiteRepository:
         return [self._document_from_row(row) for row in rows]
 
     def mark_document_indexing(self, document_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "UPDATE documents SET status = ?, error = NULL WHERE id = ?",
                 (DocumentStatus.INDEXING, document_id),
             )
 
     def mark_document_indexed(self, document_id: str, chunk_count: int) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 UPDATE documents
@@ -140,14 +141,14 @@ class SQLiteRepository:
             )
 
     def mark_document_failed(self, document_id: str, error: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "UPDATE documents SET status = ?, error = ? WHERE id = ?",
                 (DocumentStatus.FAILED, error, document_id),
             )
 
     def set_document_text_path(self, document_id: str, text_path: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "UPDATE documents SET text_path = ? WHERE id = ?",
                 (text_path, document_id),
@@ -156,7 +157,7 @@ class SQLiteRepository:
     def create_job(self, document_id: str, collection: str) -> JobRecord:
         job_id = f"job_{uuid4().hex}"
         created_at = self._now()
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO ingestion_jobs (
@@ -183,21 +184,21 @@ class SQLiteRepository:
         return self.get_job(job_id)
 
     def set_job_rq_id(self, job_id: str, rq_job_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "UPDATE ingestion_jobs SET rq_job_id = ?, updated_at = ? WHERE id = ?",
                 (rq_job_id, self._now(), job_id),
             )
 
     def get_job(self, job_id: str) -> JobRecord:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("SELECT * FROM ingestion_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise KeyError(f"Job not found: {job_id}")
         return self._job_from_row(row)
 
     def get_job_by_rq_id(self, rq_job_id: str) -> JobRecord:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM ingestion_jobs WHERE rq_job_id = ?",
                 (rq_job_id,),
@@ -221,9 +222,9 @@ class SQLiteRepository:
         if status == JobStatus.RUNNING and started_at is None:
             started_at = now
         if status in {JobStatus.SUCCEEDED, JobStatus.FAILED}:
-            finished_at = now
+            finished_at = finished_at or now
 
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 UPDATE ingestion_jobs
@@ -251,7 +252,7 @@ class SQLiteRepository:
             )
             for chunk in chunks
         ]
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executemany(
                 """
                 INSERT INTO chunks (
@@ -268,6 +269,15 @@ class SQLiteRepository:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     @staticmethod
     def _document_from_row(row: sqlite3.Row) -> DocumentRecord:

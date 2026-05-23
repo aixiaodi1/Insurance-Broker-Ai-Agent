@@ -1,6 +1,8 @@
+import sqlite3
 from pathlib import Path
 
 from app.domain import DocumentStatus, JobStage, JobStatus
+from app.infrastructure.repositories import sqlite as sqlite_repository
 from app.infrastructure.repositories.sqlite import SQLiteRepository
 
 
@@ -44,3 +46,93 @@ def test_repository_creates_document_job_and_chunks(tmp_path: Path) -> None:
     assert stored_document.chunk_count == 1
     assert stored_job.status == JobStatus.SUCCEEDED
     assert repo.list_documents(collection="docs")[0].filename == "guide.md"
+
+
+def test_repository_preserves_finished_at_after_terminal_update(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    timestamps = iter(
+        [
+            "2026-05-24T01:00:00+08:00",
+            "2026-05-24T01:00:01+08:00",
+            "2026-05-24T01:00:02+08:00",
+            "2026-05-24T01:00:03+08:00",
+            "2026-05-24T01:00:04+08:00",
+        ]
+    )
+    monkeypatch.setattr(SQLiteRepository, "_now", staticmethod(lambda: next(timestamps)))
+
+    repo = SQLiteRepository(f"sqlite:///{tmp_path / 'rag.sqlite'}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="abc123",
+    )
+    job = repo.create_job(document_id=document.id, collection="docs")
+
+    repo.update_job(job.id, status=JobStatus.SUCCEEDED, stage=JobStage.DONE, progress=100)
+    first_finished_at = repo.get_job(job.id).finished_at
+
+    repo.update_job(job.id, status=JobStatus.SUCCEEDED, stage=JobStage.DONE, progress=100)
+
+    assert repo.get_job(job.id).finished_at == first_finished_at
+
+
+def test_repository_gets_job_by_rq_id(tmp_path: Path) -> None:
+    repo = SQLiteRepository(f"sqlite:///{tmp_path / 'rag.sqlite'}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="abc123",
+    )
+    job = repo.create_job(document_id=document.id, collection="docs")
+
+    repo.set_job_rq_id(job.id, "rq-job-123")
+
+    assert repo.get_job_by_rq_id("rq-job-123").id == job.id
+
+
+def test_repository_closes_connections_after_operations(tmp_path: Path, monkeypatch) -> None:
+    closed_paths: list[Path] = []
+    real_connect = sqlite3.connect
+
+    class TrackedConnection(sqlite3.Connection):
+        def close(self) -> None:
+            closed_paths.append(Path(self.execute("PRAGMA database_list").fetchone()[2]))
+            super().close()
+
+    def connect(*args, **kwargs):
+        kwargs["factory"] = TrackedConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite_repository.sqlite3, "connect", connect)
+
+    database_path = tmp_path / "rag.sqlite"
+    repo = SQLiteRepository(f"sqlite:///{database_path}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="abc123",
+    )
+    job = repo.create_job(document_id=document.id, collection="docs")
+    repo.update_job(job.id, status=JobStatus.SUCCEEDED, stage=JobStage.DONE, progress=100)
+
+    renamed_path = tmp_path / "rag-renamed.sqlite"
+    database_path.rename(renamed_path)
+    renamed_path.unlink()
+
+    assert closed_paths
+    assert all(path == database_path for path in closed_paths)
