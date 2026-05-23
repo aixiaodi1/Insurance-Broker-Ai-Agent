@@ -49,7 +49,7 @@ export interface AgentVectorMatch {
   nodeId: string;
   provider: "tencent-vectordb" | "qdrant";
   collection: string;
-  score: number;
+  score?: number;
   title: string;
   contentPreview: string;
   metadata: Record<string, unknown>;
