@@ -82,7 +82,8 @@ export function InspectorPanel({
               <strong>{match.title}</strong>
               <p>{match.contentPreview}</p>
               <small>
-                {match.provider} · {match.collection} · {match.score.toFixed(2)}
+                {match.provider} · {match.collection} ·{" "}
+                {typeof match.score === "number" ? match.score.toFixed(2) : "无分数"}
               </small>
             </article>
           ))

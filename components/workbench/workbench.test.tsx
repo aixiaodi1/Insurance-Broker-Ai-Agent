@@ -19,4 +19,17 @@ describe("AgentWorkbench", () => {
     expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
     expect(screen.queryByText("Final Answer")).not.toBeInTheDocument();
   });
+
+  it("does not crash when a vector match has no score", () => {
+    const run = getInitialMockRun();
+    run.vectorMatches = run.vectorMatches.map((match) => {
+      const looseMatch = { ...match } as Record<string, unknown>;
+      delete looseMatch.score;
+      return looseMatch as (typeof run.vectorMatches)[number];
+    });
+
+    render(<AgentWorkbench initialRun={run} />);
+
+    expect(screen.getByRole("heading", { name: /LangGraph/ })).toBeInTheDocument();
+  });
 });
