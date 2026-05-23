@@ -1,0 +1,97 @@
+import httpx
+import pytest
+
+from app.errors import NonRetryableIngestionError
+from app.infrastructure.embeddings.local_api import LocalApiEmbeddingProvider
+
+
+def test_local_embedding_provider_reads_key_and_validates_dimension(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"data": [{"embedding": [0.1, 0.2, 0.3]}, {"embedding": [0.4, 0.5, 0.6]}]},
+    )
+    provider = LocalApiEmbeddingProvider(
+        base_url="http://localhost:9000",
+        path="/v1/embeddings",
+        api_key="secret",
+        model="embo-01",
+        dimension=3,
+        batch_size=32,
+    )
+
+    embeddings = provider.embed_texts(["alpha", "beta"])
+    request = httpx_mock.get_request()
+
+    assert embeddings == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert isinstance(request, httpx.Request)
+    assert request.headers["Authorization"] == "Bearer secret"
+    assert request.read() == b'{"model":"embo-01","input":["alpha","beta"]}'
+
+
+def test_local_embedding_provider_accepts_embeddings_response_shape(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[0.1, 0.2, 0.3]]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    assert provider.embed_texts(["alpha"]) == [[0.1, 0.2, 0.3]]
+
+
+def test_local_embedding_provider_rejects_dimension_mismatch(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[0.1, 0.2]]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError):
+        provider.embed_texts(["alpha"])
+
+
+def test_local_embedding_provider_rejects_missing_embeddings_shape(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"items": []},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError):
+        provider.embed_texts(["alpha"])
+
+
+def test_local_embedding_provider_batches_requests_and_normalizes_url(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[0.1], [0.2]]},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[0.3]]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000/", "v1/embeddings", "", "embo-01", 1, 2)
+
+    assert provider.embed_texts(["alpha", "beta", "gamma"]) == [[0.1], [0.2], [0.3]]
+    assert [request.read() for request in httpx_mock.get_requests()] == [
+        b'{"model":"embo-01","input":["alpha","beta"]}',
+        b'{"model":"embo-01","input":["gamma"]}',
+    ]
+
+
+def test_local_embedding_provider_omits_auth_header_when_key_is_empty(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[0.1, 0.2, 0.3]]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    provider.embed_texts(["alpha"])
+
+    assert "Authorization" not in httpx_mock.get_request().headers
