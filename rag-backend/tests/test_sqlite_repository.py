@@ -101,6 +101,25 @@ def test_repository_gets_job_by_rq_id(tmp_path: Path) -> None:
     assert repo.get_job_by_rq_id("rq-job-123").id == job.id
 
 
+def test_repository_updates_document_source_path(tmp_path: Path) -> None:
+    repo = SQLiteRepository(f"sqlite:///{tmp_path / 'rag.sqlite'}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "_pending" / "guide.md"),
+        content_hash="abc123",
+    )
+    final_path = str(tmp_path / document.id / "original.md")
+
+    updated = repo.update_document_source_path(document.id, final_path)
+
+    assert updated.source_path == final_path
+    assert repo.get_document(document.id).source_path == final_path
+
+
 def test_repository_closes_connections_after_operations(tmp_path: Path, monkeypatch) -> None:
     closed_paths: list[Path] = []
     real_connect = sqlite3.connect

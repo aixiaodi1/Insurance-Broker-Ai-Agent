@@ -1,5 +1,4 @@
 import inspect
-from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -11,7 +10,7 @@ from app.services.job_service import JobService
 
 
 class QueueClient(Protocol):
-    def enqueue(self, target: str, *args, **kwargs): ...
+    def enqueue_ingestion(self, document_id: str, collection: str) -> str: ...
 
 
 class DocumentService:
@@ -61,16 +60,10 @@ class DocumentService:
             final_path = self.settings.upload_dir / document.id / f"original{extension}"
             final_path.parent.mkdir(parents=True, exist_ok=True)
             final_path.write_bytes(content)
-            document = replace(document, source_path=str(final_path))
-            self._sync_repository_document_source_path(document)
+            document = self.repository.update_document_source_path(document.id, str(final_path))
 
             job = self.job_service.create_job(document.id, normalized_collection)
-            rq_job = self.queue_client.enqueue(
-                "app.services.ingestion_service.ingest_document",
-                job.id,
-                document.id,
-                normalized_collection,
-            )
+            rq_job = self.queue_client.enqueue_ingestion(document.id, normalized_collection)
             rq_job_id = getattr(rq_job, "id", rq_job)
             job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
 
@@ -95,18 +88,3 @@ class DocumentService:
         max_bytes = self.settings.max_upload_mb * 1024 * 1024
         if size_bytes > max_bytes:
             raise ValidationError(f"Uploaded file exceeds {self.settings.max_upload_mb} MB.")
-
-    def _sync_repository_document_source_path(self, document) -> None:
-        documents = getattr(self.repository, "documents", None)
-        if isinstance(documents, dict) and document.id in documents:
-            documents[document.id] = document
-
-        connection_factory = getattr(self.repository, "_connection", None)
-        if connection_factory is None:
-            return
-
-        with connection_factory() as connection:
-            connection.execute(
-                "UPDATE documents SET source_path = ? WHERE id = ?",
-                (document.source_path, document.id),
-            )

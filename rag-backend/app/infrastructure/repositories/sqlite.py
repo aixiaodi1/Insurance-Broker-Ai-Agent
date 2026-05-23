@@ -122,6 +122,14 @@ class SQLiteRepository:
                 ).fetchall()
         return [self._document_from_row(row) for row in rows]
 
+    def update_document_source_path(self, document_id: str, source_path: str) -> DocumentRecord:
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE documents SET source_path = ? WHERE id = ?",
+                (source_path, document_id),
+            )
+        return self.get_document(document_id)
+
     def mark_document_indexing(self, document_id: str) -> None:
         with self._connection() as connection:
             connection.execute(

@@ -6,7 +6,7 @@ import pytest
 
 from app.config import Settings
 from app.domain import DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus, TextChunk
-from app.errors import NonRetryableIngestionError
+from app.errors import NonRetryableIngestionError, RetryableIngestionError, ValidationError
 from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
 from app.services.job_service import JobService
@@ -17,6 +17,7 @@ class FakeRepository:
         self.documents: dict[str, DocumentRecord] = {}
         self.jobs: dict[str, JobRecord] = {}
         self.chunks: list[dict] = []
+        self.source_path_updates: list[tuple[str, str]] = []
         self.document_counter = 0
         self.job_counter = 0
 
@@ -76,6 +77,11 @@ class FakeRepository:
 
     def set_document_text_path(self, document_id: str, text_path: str) -> None:
         self.documents[document_id] = replace(self.documents[document_id], text_path=text_path)
+
+    def update_document_source_path(self, document_id: str, source_path: str) -> DocumentRecord:
+        self.source_path_updates.append((document_id, source_path))
+        self.documents[document_id] = replace(self.documents[document_id], source_path=source_path)
+        return self.documents[document_id]
 
     def create_job(self, document_id: str, collection: str) -> JobRecord:
         self.job_counter += 1
@@ -137,10 +143,10 @@ class FakeUploadFile:
 
 class FakeQueue:
     def __init__(self) -> None:
-        self.enqueued: list[tuple[str, tuple, dict]] = []
+        self.enqueued: list[tuple[str, str]] = []
 
-    def enqueue(self, target: str, *args, **kwargs):
-        self.enqueued.append((target, args, kwargs))
+    def enqueue_ingestion(self, document_id: str, collection: str) -> str:
+        self.enqueued.append((document_id, collection))
         return f"rq-{len(self.enqueued)}"
 
 
@@ -152,6 +158,11 @@ class FakeParser:
     def parse(self, path: Path) -> str:
         self.paths.append(path)
         return self.text
+
+
+class RetryableParser:
+    def parse(self, path: Path) -> str:
+        raise RetryableIngestionError("parser temporarily unavailable")
 
 
 class FakeChunker:
@@ -215,16 +226,68 @@ def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path:
     assert document.filename == "Guide.TXT"
     assert document.file_size == 9
     assert document.source_path == str(saved_path)
+    assert repository.source_path_updates == [(document.id, str(saved_path))]
+    assert repository.get_document(document.id).source_path == str(saved_path)
     assert document.content_hash == "d5998278b9de71718106464bf36ffd0b37e4eb7e2592b0cfd3081e316ac78313"
     assert job.document_id == document.id
     assert repository.get_job(job.id).rq_job_id == "rq-1"
-    assert queue.enqueued == [
-        (
-            "app.services.ingestion_service.ingest_document",
-            (job.id, document.id, "docs"),
-            {},
-        )
-    ]
+    assert queue.enqueued == [(document.id, "docs")]
+
+
+@pytest.mark.parametrize(
+    ("files", "collection", "settings", "message"),
+    [
+        ([FakeUploadFile("guide.txt", b"hello")], "   ", {}, "Collection is required"),
+        ([FakeUploadFile("guide.exe", b"hello")], "docs", {}, "Unsupported file extension"),
+        ([FakeUploadFile("guide.txt", b"x" * 2)], "docs", {"max_upload_mb": 0}, "exceeds 0 MB"),
+    ],
+)
+def test_document_service_upload_validation_failures(
+    tmp_path: Path,
+    files: list[FakeUploadFile],
+    collection: str,
+    settings: dict,
+    message: str,
+) -> None:
+    repository = FakeRepository()
+    queue = FakeQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(
+            upload_dir=tmp_path,
+            allowed_extensions=[".txt"],
+            max_upload_mb=settings.get("max_upload_mb", 1),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match=message):
+        asyncio.run(service.upload_files(files, collection))
+
+    assert repository.documents == {}
+    assert repository.jobs == {}
+    assert queue.enqueued == []
+
+
+def test_job_service_reads_and_attaches_jobs_by_public_repository_methods() -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=42,
+        source_path="/tmp/guide.md",
+        content_hash="hash123",
+    )
+    job_service = JobService(repository)
+    job = job_service.create_job(document.id, "docs")
+
+    attached = job_service.attach_rq_job(job.id, "rq-job-123")
+
+    assert attached.rq_job_id == "rq-job-123"
+    assert job_service.get_job(job.id).id == job.id
+    assert job_service.get_job_by_rq_id("rq-job-123").id == job.id
 
 
 def test_ingestion_service_ingests_document_through_all_stages(tmp_path: Path) -> None:
@@ -364,3 +427,36 @@ def test_ingestion_service_marks_empty_parsed_text_failed_without_retry(tmp_path
     assert stored_job.progress == 20
     assert stored_document.status == DocumentStatus.FAILED
     assert stored_document.error == stored_job.error
+
+
+def test_ingestion_service_persists_retryable_error_and_preserves_progress(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="retry.txt",
+        collection="docs",
+        mime_type="text/plain",
+        file_size=1,
+        source_path=str(tmp_path / "retry.txt"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_text("retry", encoding="utf-8")
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=RetryableParser(),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    with pytest.raises(RetryableIngestionError, match="temporarily unavailable"):
+        service.ingest_document(job.id, document.id, "docs")
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.RUNNING
+    assert stored_job.stage == JobStage.PARSING
+    assert stored_job.progress == 20
+    assert stored_job.error == "parser temporarily unavailable"
+    assert stored_document.status == DocumentStatus.INDEXING
