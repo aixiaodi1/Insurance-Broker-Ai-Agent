@@ -64,6 +64,18 @@ def test_local_embedding_provider_rejects_missing_embeddings_shape(httpx_mock) -
         provider.embed_texts(["alpha"])
 
 
+def test_local_embedding_provider_rejects_data_item_missing_embedding(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"data": [{"not_embedding": [0.1, 0.2, 0.3]}]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError, match="data item.*embedding"):
+        provider.embed_texts(["alpha"])
+
+
 def test_local_embedding_provider_batches_requests_and_normalizes_url(httpx_mock) -> None:
     httpx_mock.add_response(
         method="POST",

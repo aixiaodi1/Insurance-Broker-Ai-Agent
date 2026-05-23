@@ -58,11 +58,16 @@ class LocalApiEmbeddingProvider:
         if raw_embeddings is None and "data" in payload:
             data = payload["data"]
             if isinstance(data, list):
-                raw_embeddings = [
-                    item.get("embedding")
-                    for item in data
-                    if isinstance(item, dict) and "embedding" in item
-                ]
+                raw_embeddings = []
+                for item in data:
+                    if not isinstance(item, dict) or "embedding" not in item:
+                        raise NonRetryableIngestionError(
+                            "Embedding API response data item did not include an embedding."
+                        )
+                    embedding = item["embedding"]
+                    if not isinstance(embedding, list):
+                        raise NonRetryableIngestionError("Embedding API response data item embedding must be a list.")
+                    raw_embeddings.append(embedding)
 
         if not isinstance(raw_embeddings, list):
             raise NonRetryableIngestionError("Embedding API response did not include embeddings.")
