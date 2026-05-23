@@ -2,16 +2,12 @@ import inspect
 import shutil
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
 
 from app.config import Settings
 from app.errors import ValidationError
+from app.infrastructure.queue.base import QueueClient
 from app.infrastructure.repositories.base import Repository
 from app.services.job_service import JobService
-
-
-class QueueClient(Protocol):
-    def enqueue_ingestion(self, document_id: str, collection: str) -> str: ...
 
 
 class DocumentService:
