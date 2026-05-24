@@ -24,9 +24,9 @@ def store(tmp_path: Path):
         store.close()
 
 
-def test_chroma_store_adds_chunks_with_metadata(store: ChromaVectorStore) -> None:
+def test_chroma_store_upserts_chunks_with_metadata(store: ChromaVectorStore) -> None:
     store.ensure_collection("docs")
-    store.add_chunks(
+    store.upsert_chunks(
         collection="docs",
         ids=["doc_1:0"],
         texts=["hello chroma"],
@@ -51,6 +51,31 @@ def test_chroma_store_adds_chunks_with_metadata(store: ChromaVectorStore) -> Non
     assert result["documents"] == ["hello chroma"]
     assert result["metadatas"][0]["source_file"] == "guide.md"
     assert result["metadatas"][0]["chunk_index"] == 0
+
+
+def test_chroma_store_upserts_same_id_without_duplicate_failure(store: ChromaVectorStore) -> None:
+    store.upsert_chunks(
+        collection="docs",
+        ids=["doc_1:0"],
+        texts=["first version"],
+        embeddings=[[0.1, 0.2, 0.3]],
+        metadatas=[{"source_file": "first.md", "chunk_index": 0}],
+    )
+
+    store.upsert_chunks(
+        collection="docs",
+        ids=["doc_1:0"],
+        texts=["second version"],
+        embeddings=[[0.4, 0.5, 0.6]],
+        metadatas=[{"source_file": "second.md", "chunk_index": 9}],
+    )
+
+    collection = store.client.get_collection("docs")
+    result = collection.get(ids=["doc_1:0"], include=["documents", "metadatas"])
+
+    assert result["ids"] == ["doc_1:0"]
+    assert result["documents"] == ["second version"]
+    assert result["metadatas"] == [{"chunk_index": 9, "source_file": "second.md"}]
 
 
 def test_chroma_store_lists_collection_names_sorted(store: ChromaVectorStore) -> None:
@@ -93,7 +118,7 @@ def test_chroma_store_rejects_deterministic_input_errors_before_write(
     store = make_store_with_client(UnexpectedClient())
 
     with pytest.raises(NonRetryableIngestionError, match=match):
-        store.add_chunks(
+        store.upsert_chunks(
             collection="docs",
             ids=ids,
             texts=texts,
@@ -104,8 +129,8 @@ def test_chroma_store_rejects_deterministic_input_errors_before_write(
 
 def test_chroma_store_wraps_write_errors() -> None:
     class BrokenCollection:
-        def add(self, **kwargs) -> None:
-            raise RuntimeError("disk unavailable")
+        def upsert(self, **kwargs) -> None:
+            raise RuntimeError("disk unavailable at C:/secret/chroma")
 
     class FakeClient:
         def get_or_create_collection(self, name: str) -> BrokenCollection:
@@ -113,14 +138,16 @@ def test_chroma_store_wraps_write_errors() -> None:
 
     store = make_store_with_client(FakeClient())
 
-    with pytest.raises(RetryableIngestionError, match="Chroma write failed"):
-        store.add_chunks(
+    with pytest.raises(RetryableIngestionError, match="Chroma write failed") as exc_info:
+        store.upsert_chunks(
             collection="docs",
             ids=["doc_1:0"],
             texts=["hello chroma"],
             embeddings=[[0.1, 0.2, 0.3]],
             metadatas=[{"source_file": "guide.md"}],
         )
+
+    assert "secret" not in str(exc_info.value)
 
 
 def test_chroma_store_close_uses_client_close_once() -> None:
@@ -164,7 +191,7 @@ def test_chroma_store_close_falls_back_to_system_stop_once() -> None:
 def test_chroma_store_close_allows_chroma_directory_cleanup(tmp_path: Path) -> None:
     chroma_dir = tmp_path / "chroma"
     store = ChromaVectorStore(chroma_dir)
-    store.add_chunks(
+    store.upsert_chunks(
         collection="docs",
         ids=["doc_1:0"],
         texts=["hello chroma"],

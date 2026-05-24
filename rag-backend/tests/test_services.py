@@ -128,8 +128,24 @@ class FakeRepository:
             error=error,
         )
 
+    def replace_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
+        self.chunks = [chunk for chunk in self.chunks if chunk["document_id"] != document_id]
+        self.chunks.extend({**chunk, "document_id": document_id, "collection": collection} for chunk in chunks)
+
     def add_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
         self.chunks.extend({**chunk, "document_id": document_id, "collection": collection} for chunk in chunks)
+
+
+class FailOnceReplaceRepository(FakeRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.replace_attempts = 0
+
+    def replace_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
+        self.replace_attempts += 1
+        if self.replace_attempts == 1:
+            raise RuntimeError("sqlite temporarily locked")
+        super().replace_chunks(document_id, collection, chunks)
 
 
 class FakeUploadFile:
@@ -231,12 +247,22 @@ class RetryableParser:
         raise RetryableIngestionError("parser temporarily unavailable")
 
 
+class ValueErrorParser:
+    def parse(self, path: Path) -> str:
+        raise ValueError("bad pdf secret path C:/secrets/private.pdf")
+
+
 class FakeChunker:
     def split(self, text: str) -> list[TextChunk]:
         return [
             TextChunk(chunk_index=0, text="first chunk", token_count=2),
             TextChunk(chunk_index=1, text="second chunk", token_count=2),
         ]
+
+
+class ValueErrorChunker:
+    def split(self, text: str) -> list[TextChunk]:
+        raise ValueError("Cannot chunk empty text")
 
 
 class FakeEmbeddingProvider:
@@ -264,7 +290,7 @@ class FakeVectorStore:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def add_chunks(
+    def upsert_chunks(
         self,
         collection: str,
         ids: list[str],
@@ -282,14 +308,6 @@ class FakeVectorStore:
             }
         )
 
-
-class StageCapturingVectorStore(FakeVectorStore):
-    def __init__(self, repository: FakeRepository, job_id: str) -> None:
-        super().__init__()
-        self.repository = repository
-        self.job_id = job_id
-        self.stage_at_call: JobStage | None = None
-
     def add_chunks(
         self,
         collection: str,
@@ -298,8 +316,26 @@ class StageCapturingVectorStore(FakeVectorStore):
         embeddings: list[list[float]],
         metadatas: list[dict],
     ) -> None:
+        self.upsert_chunks(collection, ids, texts, embeddings, metadatas)
+
+
+class StageCapturingVectorStore(FakeVectorStore):
+    def __init__(self, repository: FakeRepository, job_id: str) -> None:
+        super().__init__()
+        self.repository = repository
+        self.job_id = job_id
+        self.stage_at_call: JobStage | None = None
+
+    def upsert_chunks(
+        self,
+        collection: str,
+        ids: list[str],
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+    ) -> None:
         self.stage_at_call = self.repository.get_job(self.job_id).stage
-        super().add_chunks(collection, ids, texts, embeddings, metadatas)
+        super().upsert_chunks(collection, ids, texts, embeddings, metadatas)
 
 
 def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path: Path) -> None:
@@ -684,6 +720,44 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
     ]
 
 
+def test_ingestion_service_retry_after_vector_write_replaces_chunk_metadata(tmp_path: Path) -> None:
+    repository = FailOnceReplaceRepository()
+    document = repository.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=42,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_text("# Guide", encoding="utf-8")
+    job = repository.create_job(document.id, "docs")
+    vector_store = FakeVectorStore()
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=FakeParser("parsed text"),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=vector_store,
+    )
+
+    with pytest.raises(RuntimeError, match="sqlite temporarily locked"):
+        service.ingest_document(job.id, document.id, "docs")
+
+    service.ingest_document(job.id, document.id, "docs")
+
+    assert repository.replace_attempts == 2
+    assert [call["ids"] for call in vector_store.calls] == [
+        [f"{document.id}:0", f"{document.id}:1"],
+        [f"{document.id}:0", f"{document.id}:1"],
+    ]
+    assert len(repository.chunks) == 2
+    assert [chunk["chroma_id"] for chunk in repository.chunks] == [f"{document.id}:0", f"{document.id}:1"]
+    assert repository.get_document(document.id).status == DocumentStatus.INDEXED
+    assert repository.get_job(job.id).status == JobStatus.SUCCEEDED
+
+
 def test_ingestion_service_reports_embedding_and_writing_before_slow_calls(tmp_path: Path) -> None:
     repository = FakeRepository()
     document = repository.create_document(
@@ -742,6 +816,75 @@ def test_ingestion_service_marks_empty_parsed_text_failed_without_retry(tmp_path
     assert stored_job.status == JobStatus.FAILED
     assert stored_job.stage == JobStage.PARSING
     assert stored_job.progress == 20
+    assert stored_document.status == DocumentStatus.FAILED
+    assert stored_document.error == stored_job.error
+
+
+def test_ingestion_service_marks_parser_value_error_failed_without_retry_and_sanitizes(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="bad.pdf",
+        collection="docs",
+        mime_type="application/pdf",
+        file_size=1,
+        source_path=str(tmp_path / "bad.pdf"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_bytes(b"not a pdf")
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=ValueErrorParser(),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    with pytest.raises(NonRetryableIngestionError, match="Document parsing failed"):
+        service.ingest_document(job.id, document.id, "docs")
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.FAILED
+    assert stored_job.stage == JobStage.PARSING
+    assert stored_job.error == "Document parsing failed."
+    assert stored_document.status == DocumentStatus.FAILED
+    assert stored_document.error == stored_job.error
+    assert "secret" not in stored_job.error
+    assert "private.pdf" not in stored_job.error
+
+
+def test_ingestion_service_marks_chunker_value_error_failed_without_retry(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="empty.txt",
+        collection="docs",
+        mime_type="text/plain",
+        file_size=1,
+        source_path=str(tmp_path / "empty.txt"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_text("content", encoding="utf-8")
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=FakeParser("parsed text"),
+        chunker=ValueErrorChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    with pytest.raises(NonRetryableIngestionError, match="Document chunking failed"):
+        service.ingest_document(job.id, document.id, "docs")
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.FAILED
+    assert stored_job.stage == JobStage.CHUNKING
+    assert stored_job.progress == 35
+    assert stored_job.error == "Document chunking failed: Cannot chunk empty text"
     assert stored_document.status == DocumentStatus.FAILED
     assert stored_document.error == stored_job.error
 

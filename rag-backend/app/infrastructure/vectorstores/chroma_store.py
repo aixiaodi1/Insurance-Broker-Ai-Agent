@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import chromadb
@@ -34,7 +35,7 @@ class ChromaVectorStore:
         names = [collection if isinstance(collection, str) else collection.name for collection in collections]
         return sorted(names)
 
-    def add_chunks(
+    def upsert_chunks(
         self,
         collection: str,
         ids: list[str],
@@ -56,6 +57,25 @@ class ChromaVectorStore:
 
         try:
             target = self.client.get_or_create_collection(collection)
-            target.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+            target.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         except Exception as exc:
-            raise RetryableIngestionError(f"Chroma write failed: {exc}") from exc
+            raise RetryableIngestionError(f"Chroma write failed: {_sanitize_error_message(str(exc))}") from exc
+
+    def add_chunks(
+        self,
+        collection: str,
+        ids: list[str],
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+    ) -> None:
+        self.upsert_chunks(collection, ids, texts, embeddings, metadatas)
+
+
+def _sanitize_error_message(message: str) -> str:
+    if not message:
+        return "unknown error"
+
+    sanitized = re.sub(r"[A-Za-z]:[\\/][^\s]+", "<path>", message)
+    sanitized = re.sub(r"(?<!\w)/(?:[^\s/]+/)+[^\s]+", "<path>", sanitized)
+    return sanitized

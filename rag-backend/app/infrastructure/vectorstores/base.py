@@ -4,7 +4,7 @@ from typing import Protocol
 class VectorStore(Protocol):
     def ensure_collection(self, name: str) -> None: ...
     def list_collections(self) -> list[str]: ...
-    def add_chunks(
+    def upsert_chunks(
         self,
         collection: str,
         ids: list[str],

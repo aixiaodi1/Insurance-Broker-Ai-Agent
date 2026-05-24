@@ -243,7 +243,7 @@ class SQLiteRepository:
                 (status, stage, progress, error, now, started_at, finished_at, job_id),
             )
 
-    def add_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
+    def replace_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
         created_at = self._now()
         rows = [
             (
@@ -261,6 +261,7 @@ class SQLiteRepository:
             for chunk in chunks
         ]
         with self._connection() as connection:
+            connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
             connection.executemany(
                 """
                 INSERT INTO chunks (
@@ -271,6 +272,9 @@ class SQLiteRepository:
                 """,
                 rows,
             )
+
+    def add_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
+        self.replace_chunks(document_id, collection, chunks)
 
     def _connect(self) -> sqlite3.Connection:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)

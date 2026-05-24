@@ -22,7 +22,7 @@ def test_repository_creates_document_job_and_chunks(tmp_path: Path) -> None:
 
     repo.mark_document_indexing(document.id)
     repo.update_job(job.id, status=JobStatus.RUNNING, stage=JobStage.EMBEDDING, progress=65)
-    repo.add_chunks(
+    repo.replace_chunks(
         document_id=document.id,
         collection="docs",
         chunks=[
@@ -46,6 +46,94 @@ def test_repository_creates_document_job_and_chunks(tmp_path: Path) -> None:
     assert stored_document.chunk_count == 1
     assert stored_job.status == JobStatus.SUCCEEDED
     assert repo.list_documents(collection="docs")[0].filename == "guide.md"
+
+
+def test_repository_replace_chunks_removes_stale_document_chunks(tmp_path: Path) -> None:
+    database_path = tmp_path / "rag.sqlite"
+    repo = SQLiteRepository(f"sqlite:///{database_path}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="abc123",
+    )
+    other_document = repo.create_document(
+        filename="other.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=10,
+        source_path=str(tmp_path / "other.md"),
+        content_hash="def456",
+    )
+
+    repo.replace_chunks(
+        document_id=document.id,
+        collection="docs",
+        chunks=[
+            {
+                "chunk_index": 0,
+                "chroma_id": f"{document.id}:0",
+                "content_preview": "stale first",
+                "token_count": 2,
+                "source_file": "guide.md",
+                "upload_time": document.created_at,
+            },
+            {
+                "chunk_index": 1,
+                "chroma_id": f"{document.id}:1",
+                "content_preview": "stale second",
+                "token_count": 2,
+                "source_file": "guide.md",
+                "upload_time": document.created_at,
+            },
+        ],
+    )
+    repo.replace_chunks(
+        document_id=other_document.id,
+        collection="docs",
+        chunks=[
+            {
+                "chunk_index": 0,
+                "chroma_id": f"{other_document.id}:0",
+                "content_preview": "other",
+                "token_count": 1,
+                "source_file": "other.md",
+                "upload_time": other_document.created_at,
+            }
+        ],
+    )
+
+    repo.replace_chunks(
+        document_id=document.id,
+        collection="docs",
+        chunks=[
+            {
+                "chunk_index": 0,
+                "chroma_id": f"{document.id}:0",
+                "content_preview": "fresh only",
+                "token_count": 2,
+                "source_file": "guide.md",
+                "upload_time": document.created_at,
+            }
+        ],
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT document_id, chunk_index, chroma_id, content_preview
+            FROM chunks
+            ORDER BY document_id, chunk_index
+            """
+        ).fetchall()
+
+    assert set(rows) == {
+        (document.id, 0, f"{document.id}:0", "fresh only"),
+        (other_document.id, 0, f"{other_document.id}:0", "other"),
+    }
 
 
 def test_repository_preserves_finished_at_after_terminal_update(
