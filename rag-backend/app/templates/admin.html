@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG 后台管理</title>
+    <link rel="stylesheet" href="/static/admin.css" />
+  </head>
+  <body>
+    <main class="admin-shell">
+      <header class="hero">
+        <p class="eyebrow">RAG Backend</p>
+        <h1>知识库摄取管理</h1>
+        <p class="hero-copy">上传文档、跟踪摄取任务，并查看当前文档索引状态。</p>
+      </header>
+
+      <section class="grid" aria-label="后台管理区域">
+        <article class="card upload-card">
+          <div class="card-heading">
+            <p class="section-number">01</p>
+            <h2>上传区</h2>
+          </div>
+          <form id="upload-form" action="/documents/upload" method="post" enctype="multipart/form-data">
+            <label for="collection">Collection</label>
+            <input id="collection" name="collection" type="text" value="default" autocomplete="off" />
+
+            <label for="files">选择文档</label>
+            <input id="files" name="files" type="file" accept=".txt,.md,.pdf" multiple required />
+            <p class="hint">支持多个 .txt、.md、.pdf 文件。</p>
+
+            <button type="submit">上传并创建任务</button>
+          </form>
+          <pre id="upload-result" class="result-box" aria-live="polite">等待上传...</pre>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <p class="section-number">02</p>
+            <h2>任务区</h2>
+          </div>
+          <p class="hint">上传成功后会自动轮询 /jobs/{job_id}，直到任务成功或失败。</p>
+          <div id="job-list" class="stack" data-job-endpoint="/jobs/">暂无任务。</div>
+        </article>
+
+        <article class="card documents-card">
+          <div class="card-heading">
+            <p class="section-number">03</p>
+            <h2>文档区</h2>
+          </div>
+          <div class="toolbar">
+            <p class="hint">从 /documents 拉取当前文档列表。</p>
+            <button id="refresh-documents" type="button" class="secondary">刷新文档</button>
+          </div>
+          <div id="document-list" class="stack" data-documents-endpoint="/documents">尚未加载文档。</div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/admin.js" defer></script>
+  </body>
+</html>

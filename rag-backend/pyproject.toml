@@ -1,0 +1,27 @@
+[project]
+name = "rag-backend"
+version = "0.1.0"
+description = "FastAPI RAG ingestion backend for ChromaDB"
+requires-python = ">=3.11"
+dependencies = [
+  "chromadb",
+  "fastapi",
+  "httpx",
+  "jinja2",
+  "pydantic-settings",
+  "pypdf",
+  "python-multipart",
+  "redis",
+  "rq",
+  "uvicorn[standard]"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-httpx"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
