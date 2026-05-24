@@ -45,6 +45,8 @@ From the repository root, run:
 ./start.sh
 ```
 
+On Windows, you can double-click `start-wsl.bat` from the repository root. It opens WSL, automatically changes to this project directory, runs `./start.sh`, and keeps the window open if startup fails so you can read the error.
+
 The script will:
 
 - start Redis with `sudo service redis-server start` when Redis is not already running
