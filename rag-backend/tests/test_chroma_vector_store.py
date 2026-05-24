@@ -151,6 +151,39 @@ def test_chroma_store_wraps_write_errors() -> None:
     assert "secret" not in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "raw_error",
+    [
+        "Authorization: Bearer sk-secret-token",
+        "authorization=Bearer sk-secret-token",
+        "Bearer sk-secret-token",
+        "api_key=sk-secret-token",
+        "token: sk-secret-token",
+    ],
+)
+def test_chroma_store_redacts_credentials_from_write_errors(raw_error: str) -> None:
+    class BrokenCollection:
+        def upsert(self, **kwargs) -> None:
+            raise RuntimeError(raw_error)
+
+    class FakeClient:
+        def get_or_create_collection(self, name: str) -> BrokenCollection:
+            return BrokenCollection()
+
+    store = make_store_with_client(FakeClient())
+
+    with pytest.raises(RetryableIngestionError) as exc_info:
+        store.upsert_chunks(
+            collection="docs",
+            ids=["doc_1:0"],
+            texts=["hello chroma"],
+            embeddings=[[0.1, 0.2, 0.3]],
+            metadatas=[{"source_file": "guide.md"}],
+        )
+
+    assert "sk-secret-token" not in str(exc_info.value)
+
+
 def test_chroma_store_close_uses_client_close_once() -> None:
     class ClosableClient:
         def __init__(self) -> None:

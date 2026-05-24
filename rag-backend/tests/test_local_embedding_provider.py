@@ -135,6 +135,29 @@ def test_local_embedding_provider_rejects_non_finite_numeric_values(httpx_mock, 
         provider.embed_texts(["alpha"])
 
 
+def test_local_embedding_provider_accepts_mixed_int_and_float_values(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": [[1, 0.2, -3.5]]},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    assert provider.embed_texts(["alpha"]) == [[1, 0.2, -3.5]]
+
+
+def test_local_embedding_provider_rejects_infinite_values(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        text='{"embeddings": [[0.1, Infinity, 0.3]]}',
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError, match="finite numeric"):
+        provider.embed_texts(["alpha"])
+
+
 def test_local_embedding_provider_batches_requests_and_normalizes_url(httpx_mock) -> None:
     httpx_mock.add_response(
         method="POST",
