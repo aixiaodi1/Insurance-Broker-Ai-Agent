@@ -1,10 +1,18 @@
-from fastapi import FastAPI
+from pathlib import Path
 
-from app.routers import collections, documents, health, ingestion_jobs
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+from app.routers import admin, collections, documents, health, ingestion_jobs
+
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="RAG Backend Ingestion", version="0.1.0")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.include_router(admin.router)
     app.include_router(documents.router)
     app.include_router(ingestion_jobs.router)
     app.include_router(collections.router)
