@@ -7,6 +7,7 @@ API_PORT="${API_PORT:-8000}"
 ADMIN_URL="${ADMIN_URL:-http://localhost:${API_PORT}/admin}"
 HEALTH_URL="${HEALTH_URL:-http://localhost:${API_PORT}/health}"
 PYTHON_BIN="${RAG_PYTHON:-${PYTHON_BIN:-python}}"
+AUTO_INSTALL_DEPS="${AUTO_INSTALL_DEPS:-1}"
 
 API_PID=""
 WORKER_PID=""
@@ -57,15 +58,33 @@ modules = {
 }
 missing = [package for package, module in modules.items() if importlib.util.find_spec(module) is None]
 if missing:
-    print("Missing Python packages in:", sys.executable, file=sys.stderr)
+    print("Missing Python packages in:", sys.executable)
     for package in missing:
-        print(f"  - {package}", file=sys.stderr)
-    print('Install them with: python -m pip install -e "rag-backend[dev]"', file=sys.stderr)
-    print("Or reuse an existing RAG environment:", file=sys.stderr)
-    print("  RAG_PYTHON=/path/to/venv/bin/python ./start.sh", file=sys.stderr)
+        print(f"  - {package}")
     raise SystemExit(1)
 print("Using Python:", sys.executable)
 PY
+}
+
+ensure_python_dependencies() {
+  if verify_python_dependencies; then
+    return
+  fi
+
+  if [[ "$AUTO_INSTALL_DEPS" != "1" ]]; then
+    echo 'Install them with: python -m pip install -e "rag-backend[dev]"' >&2
+    echo "Or reuse another RAG environment:" >&2
+    echo "  RAG_PYTHON=/path/to/venv/bin/python ./start.sh" >&2
+    exit 1
+  fi
+
+  echo "Installing missing backend dependencies into: $PYTHON_BIN"
+  (
+    cd "$BACKEND_DIR"
+    "$PYTHON_BIN" -m pip install -e ".[dev]"
+  )
+
+  verify_python_dependencies
 }
 
 load_env() {
@@ -155,7 +174,7 @@ main() {
 
   resolve_backend_commands
   require_command "$PYTHON_BIN"
-  verify_python_dependencies
+  ensure_python_dependencies
 
   load_env
   start_redis

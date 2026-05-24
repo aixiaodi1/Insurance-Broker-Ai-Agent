@@ -51,6 +51,7 @@ The script will:
 - load `rag-backend/.env`
 - use `rag-backend/.venv` automatically when it exists
 - reuse another RAG Python environment when `RAG_PYTHON` is set
+- install missing backend Python packages into the selected Python environment when needed
 - start FastAPI on `http://localhost:8000`
 - start the RQ worker with the configured `RQ_QUEUE_NAME` and `REDIS_URL`
 - open `http://localhost:8000/admin` in your browser
@@ -67,6 +68,12 @@ You can override the defaults when starting:
 
 ```bash
 API_PORT=8010 ./start.sh
+```
+
+If you want the script to report missing dependencies without installing them automatically:
+
+```bash
+AUTO_INSTALL_DEPS=0 ./start.sh
 ```
 
 To reuse an existing RAG virtual environment instead of installing packages again, point `RAG_PYTHON` at that environment's Python:
