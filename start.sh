@@ -81,7 +81,7 @@ ensure_python_dependencies() {
   echo "Installing missing backend dependencies into: $PYTHON_BIN"
   (
     cd "$BACKEND_DIR"
-    "$PYTHON_BIN" -m pip install -e ".[dev]"
+    "$PYTHON_BIN" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e ".[dev]"
   )
 
   verify_python_dependencies
@@ -188,8 +188,14 @@ main() {
   API_PID="$!"
 
   echo "Starting RQ worker for queue ${RQ_QUEUE_NAME:-rag-ingestion}..."
-  "$PYTHON_BIN" -m rq worker "${RQ_QUEUE_NAME:-rag-ingestion}" --url "${REDIS_URL:-redis://localhost:6379/0}" &
+  "$PYTHON_BIN" -m rq.cli worker "${RQ_QUEUE_NAME:-rag-ingestion}" --url "${REDIS_URL:-redis://localhost:6379/0}" &
   WORKER_PID="$!"
+
+  sleep 1
+  if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+    echo "RQ worker exited during startup. Check the terminal output above for the Python/RQ error." >&2
+    exit 1
+  fi
 
   wait_for_health
   echo "Opening $ADMIN_URL"
