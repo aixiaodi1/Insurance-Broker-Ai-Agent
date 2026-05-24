@@ -22,7 +22,6 @@ dev = [
   "pytest-httpx"
 ]
 local-embeddings = [
-  "langchain-community",
   "sentence-transformers"
 ]
 

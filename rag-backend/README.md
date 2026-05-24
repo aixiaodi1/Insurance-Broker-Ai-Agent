@@ -71,6 +71,10 @@ From the repository root, run:
 
 On Windows, you can double-click `start-wsl.bat` from the repository root. It opens WSL, automatically changes to this project directory, runs `./start.sh`, and keeps the window open if startup fails so you can read the error.
 
+If your local embedding model already lives in a Windows virtual environment,
+double-click `start.bat` instead. It starts Redis through WSL, then runs FastAPI,
+the RQ worker, and the Next.js frontend with Windows Python/Node.
+
 The script will:
 
 - start Redis with `sudo service redis-server start` when Redis is not already running
@@ -113,6 +117,12 @@ For one-click startup, put the same value in `rag-backend/.env`:
 
 ```env
 RAG_PYTHON=/mnt/f/Dev/Hermes/src/hermes-agent/venv/Scripts/python.exe
+```
+
+For `start.bat` on Windows, use a Windows path:
+
+```env
+RAG_PYTHON_WINDOWS=E:\RAG\.venv\Scripts\python.exe
 ```
 
 On Windows PowerShell, run the same script through WSL/Git Bash and convert the Windows path to a shell-readable path, for example `F:\Dev\Hermes\...` becomes `/mnt/f/Dev/Hermes/...` in WSL.

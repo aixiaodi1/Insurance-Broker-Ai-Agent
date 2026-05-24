@@ -78,7 +78,6 @@ if provider not in {"sentence-transformers", "local", "local-model"}:
     raise SystemExit(0)
 
 modules = {
-    "langchain-community": "langchain_community",
     "sentence-transformers": "sentence_transformers",
 }
 missing = [package for package, module in modules.items() if importlib.util.find_spec(module) is None]
