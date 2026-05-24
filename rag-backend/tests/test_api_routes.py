@@ -131,6 +131,11 @@ class NonCallingEmbedder:
         raise AssertionError("embed_texts should not be called")
 
 
+class FailingHealthEmbedder(NonCallingEmbedder):
+    def health_check(self) -> None:
+        raise RuntimeError("embedding down at http://fake-secret-host")
+
+
 def make_client(overrides: dict | None = None) -> TestClient:
     app = create_app()
     for dependency, replacement in (overrides or {}).items():
@@ -414,4 +419,25 @@ def test_health_embedding_check_does_not_call_embed_texts() -> None:
 
     assert response.status_code == 200
     assert response.json()["checks"]["embedding_api"] == {"status": "ok"}
+    assert embedder.called is False
+
+
+def test_health_degrades_when_embedding_health_check_fails_without_leaking_error() -> None:
+    embedder = FailingHealthEmbedder()
+    client = make_client(
+        {
+            get_repository: lambda: FakeRepository(),
+            get_queue_client: lambda: FakeQueueClient(),
+            get_vector_store: lambda: FakeVectorStore(),
+            get_embedder: lambda: embedder,
+        }
+    )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["embedding_api"] == {"status": "error", "error": "check_failed"}
+    assert "fake-secret-host" not in response.text
     assert embedder.called is False

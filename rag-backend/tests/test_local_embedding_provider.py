@@ -88,14 +88,16 @@ def test_local_embedding_provider_treats_deterministic_4xx_as_nonretryable(httpx
         method="POST",
         url="http://localhost:9000/v1/embeddings",
         status_code=401,
-        text="invalid api_key=sk-secret-token",
+        text="invalid api_key=sk-secret-token for input: sensitive uploaded document text",
     )
     provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "sk-secret-token", "embo-01", 3, 32)
 
     with pytest.raises(NonRetryableIngestionError) as exc_info:
         provider.embed_texts(["alpha"])
 
+    assert str(exc_info.value) == "Embedding API returned non-retryable HTTP 401."
     assert "sk-secret-token" not in str(exc_info.value)
+    assert "sensitive uploaded document text" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("status_code", [429, 500])
@@ -110,6 +112,31 @@ def test_local_embedding_provider_treats_rate_limit_and_5xx_as_retryable(httpx_m
 
     with pytest.raises(RetryableIngestionError, match="Embedding API request failed"):
         provider.embed_texts(["alpha"])
+
+
+def test_local_embedding_provider_health_check_accepts_reachable_base_url(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url="http://localhost:9000",
+        status_code=404,
+        text="not found",
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    provider.health_check()
+
+
+def test_local_embedding_provider_health_check_rejects_server_error(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url="http://localhost:9000",
+        status_code=503,
+        text="temporarily unavailable",
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(RetryableIngestionError, match="health check failed"):
+        provider.health_check()
 
 
 def test_local_embedding_provider_rejects_non_positive_dimension() -> None:

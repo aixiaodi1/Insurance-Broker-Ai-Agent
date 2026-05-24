@@ -34,6 +34,11 @@ def _check_redis(queue_client: QueueClient) -> None:
 
 
 def _check_embedding_provider(embedder: EmbeddingProvider) -> None:
+    health_check = getattr(embedder, "health_check", None)
+    if callable(health_check):
+        health_check()
+        return
+
     if not callable(getattr(embedder, "embed_texts", None)):
         raise RuntimeError("embedding provider unavailable")
 
