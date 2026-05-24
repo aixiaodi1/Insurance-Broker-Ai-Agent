@@ -37,6 +37,39 @@ If Windows cannot reach WSL Redis through `redis://localhost:6379/0`, run FastAP
 
 ## Run
 
+### One-Command Start
+
+From the repository root, run:
+
+```bash
+./start.sh
+```
+
+The script will:
+
+- start Redis with `sudo service redis-server start` when Redis is not already running
+- load `rag-backend/.env`
+- use `rag-backend/.venv` automatically when it exists
+- start FastAPI on `http://localhost:8000`
+- start the RQ worker with the configured `RQ_QUEUE_NAME` and `REDIS_URL`
+- open `http://localhost:8000/admin` in your browser
+
+Press `Ctrl+C` in the script terminal to stop FastAPI and the worker.
+
+If `rag-backend/.env` does not exist yet, create it first:
+
+```bash
+cp rag-backend/.env.example rag-backend/.env
+```
+
+You can override the defaults when starting:
+
+```bash
+API_PORT=8010 ./start.sh
+```
+
+### Manual Start
+
 Start FastAPI from `rag-backend/`:
 
 ```bash
