@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.model_api import create_model_api_app
+from app.model_api import _resolve_model_max_length, create_model_api_app
 
 
 class FakeEmbeddingModel:
@@ -75,3 +75,29 @@ def test_rerank_endpoint_sorts_documents_by_score() -> None:
         "model": "reranker",
         "results": [{"index": 1, "document": "high", "score": 0.9}],
     }
+
+
+def test_embedding_model_max_length_uses_model_limit_when_tokenizer_is_larger() -> None:
+    class Tokenizer:
+        model_max_length = 2797
+
+    class Config:
+        max_position_embeddings = 512
+
+    class Model:
+        config = Config()
+
+    assert _resolve_model_max_length(Tokenizer(), Model()) == 512
+
+
+def test_embedding_model_max_length_ignores_transformers_sentinel_values() -> None:
+    class Tokenizer:
+        model_max_length = 1000000000000000019884624838656
+
+    class Config:
+        max_position_embeddings = 512
+
+    class Model:
+        config = Config()
+
+    assert _resolve_model_max_length(Tokenizer(), Model()) == 512

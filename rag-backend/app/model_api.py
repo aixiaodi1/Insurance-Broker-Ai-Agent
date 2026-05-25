@@ -135,10 +135,17 @@ class _TransformersEmbeddingModel:
         self._torch = torch
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
         self._model = AutoModel.from_pretrained(model_name)
+        self._max_length = _resolve_model_max_length(self._tokenizer, self._model)
         self._model.eval()
 
     def encode(self, texts: list[str], normalize_embeddings: bool = True) -> list[list[float]]:
-        inputs = self._tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+        inputs = self._tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=self._max_length,
+            return_tensors="pt",
+        )
         with self._torch.no_grad():
             output = self._model(**inputs)
 
@@ -179,6 +186,19 @@ def _coerce_vector(vector: object) -> list[float]:
     if any(isinstance(value, bool) or not isfinite(value) for value in values):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="model returned an invalid vector")
     return values
+
+
+def _resolve_model_max_length(tokenizer: object, model: object) -> int:
+    candidates = [
+        getattr(tokenizer, "model_max_length", None),
+        getattr(getattr(model, "config", None), "max_position_embeddings", None),
+    ]
+    sane_lengths = [
+        int(length)
+        for length in candidates
+        if isinstance(length, int | float) and isfinite(length) and 0 < int(length) < 1_000_000
+    ]
+    return min(sane_lengths) if sane_lengths else 512
 
 
 @lru_cache
