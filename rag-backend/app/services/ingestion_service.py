@@ -71,6 +71,7 @@ class IngestionService:
                     "upload_time": document.created_at,
                     "source": "upload",
                     "content_hash": document.content_hash,
+                    **chunk.metadata,
                 }
                 for chunk in chunks
             ]

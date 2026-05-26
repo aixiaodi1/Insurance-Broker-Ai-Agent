@@ -3,7 +3,7 @@ from functools import lru_cache
 from app.config import Settings
 from app.config import get_settings as get_config_settings
 from app.infrastructure.chunkers.base import Chunker
-from app.infrastructure.chunkers.recursive import RecursiveTextChunker
+from app.infrastructure.chunkers.document_aware import DocumentAwareChunker
 from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.embeddings.local_api import LocalApiEmbeddingProvider
 from app.infrastructure.embeddings.sentence_transformers import SentenceTransformersEmbeddingProvider
@@ -40,7 +40,7 @@ def get_parser_registry() -> DocumentParser:
 @lru_cache
 def get_chunker() -> Chunker:
     settings = get_settings()
-    return RecursiveTextChunker(
+    return DocumentAwareChunker(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
     )
