@@ -1,4 +1,3 @@
-import logging
 from typing import Any
 
 from rq import get_current_job
@@ -6,9 +5,10 @@ from rq import get_current_job
 from app.dependencies import get_ingestion_service, get_job_service
 from app.domain import JobStatus
 from app.errors import NonRetryableIngestionError
+from app.observability import get_logger
 from app.sanitization import sanitize_error_message
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def ingest_document_job(document_id: str, collection: str) -> None:

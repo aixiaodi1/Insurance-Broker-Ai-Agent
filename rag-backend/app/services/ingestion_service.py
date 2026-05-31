@@ -76,6 +76,7 @@ class IngestionService:
                 for chunk in chunks
             ]
             self.job_service.update_progress(job_id, JobStage.WRITING, 90)
+            self.vector_store.delete_chunks(collection=collection, where={"document_id": document_id})
             self.vector_store.upsert_chunks(
                 collection=collection,
                 ids=ids,

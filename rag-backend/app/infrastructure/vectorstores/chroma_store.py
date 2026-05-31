@@ -104,6 +104,38 @@ class ChromaVectorStore:
             for chunk_id, document, metadata, distance in zip(ids, documents, metadatas, distances, strict=False)
         ]
 
+    def get_chunks_by_ids(self, collection: str, ids: list[str]) -> list[dict]:
+        if not ids:
+            return []
+
+        try:
+            target = self.client.get_or_create_collection(collection)
+            result = target.get(ids=ids, include=["documents", "metadatas"])
+        except Exception as exc:
+            raise RetryableIngestionError(f"Chroma get failed: {sanitize_error_message(str(exc))}") from exc
+
+        result_ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+        by_id = {
+            chunk_id: {
+                "id": chunk_id,
+                "document": document,
+                "metadata": metadata or {},
+            }
+            for chunk_id, document, metadata in zip(result_ids, documents, metadatas, strict=False)
+        }
+        return [by_id[chunk_id] for chunk_id in ids if chunk_id in by_id]
+
+    def delete_chunks(self, collection: str, where: dict) -> None:
+        try:
+            target = self.client.get_or_create_collection(collection)
+            target.delete(where=where)
+        except Exception as exc:
+            raise RetryableIngestionError(
+                f"Chroma delete failed: {sanitize_error_message(str(exc))}"
+            ) from exc
+
     def add_chunks(
         self,
         collection: str,

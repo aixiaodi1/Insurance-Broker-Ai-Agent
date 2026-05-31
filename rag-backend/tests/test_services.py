@@ -343,6 +343,9 @@ class FakeVectorStore:
             }
         )
 
+    def delete_chunks(self, collection: str, where: dict) -> None:
+        self.calls.append({"method": "delete_chunks", "collection": collection, "where": where})
+
     def add_chunks(
         self,
         collection: str,
@@ -749,7 +752,8 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
 
     service.ingest_document(job.id, document.id, "docs")
 
-    call = vector_store.calls[0]
+    assert vector_store.calls[0] == {"method": "delete_chunks", "collection": "docs", "where": {"document_id": document.id}}
+    call = vector_store.calls[1]
     assert call["ids"] == [f"{document.id}:0", f"{document.id}:1"]
     assert "source_path" not in call["metadatas"][0]
     assert call["metadatas"] == [
@@ -826,7 +830,9 @@ def test_ingestion_service_retry_after_vector_write_replaces_chunk_metadata(tmp_
     service.ingest_document(job.id, document.id, "docs")
 
     assert repository.replace_attempts == 2
-    assert [call["ids"] for call in vector_store.calls] == [
+    assert vector_store.calls[0] == {"method": "delete_chunks", "collection": "docs", "where": {"document_id": document.id}}
+    assert vector_store.calls[2] == {"method": "delete_chunks", "collection": "docs", "where": {"document_id": document.id}}
+    assert [call["ids"] for call in vector_store.calls if "ids" in call] == [
         [f"{document.id}:0", f"{document.id}:1"],
         [f"{document.id}:0", f"{document.id}:1"],
     ]
