@@ -5,7 +5,7 @@ const input = {
   prompt: "Why did this graph retrieve first?",
   agentId: "research-agent",
   threadId: "thread_test",
-  vectorProvider: "qdrant" as const,
+  vectorProvider: "chroma" as const,
   debug: true
 };
 

@@ -27,7 +27,7 @@ function normalizeVectorMatches(value: unknown): AgentVectorMatch[] {
       return {
         id: `vec_${index + 1}`,
         nodeId: "retrieve_context",
-        provider: "qdrant",
+        provider: "chroma",
         collection: "default",
         title: `知识片段 ${index + 1}`,
         contentPreview: match,
@@ -40,9 +40,9 @@ function normalizeVectorMatches(value: unknown): AgentVectorMatch[] {
         id: asString(match.id, `vec_${index + 1}`),
         nodeId: asString(match.nodeId, "retrieve_context"),
         provider:
-          match.provider === "tencent-vectordb" || match.provider === "qdrant"
+          match.provider === "tencent-vectordb" || match.provider === "chroma"
             ? match.provider
-            : "qdrant",
+            : "chroma",
         collection: asString(match.collection, "default"),
         score: typeof match.score === "number" ? match.score : undefined,
         title: asString(match.title, `知识片段 ${index + 1}`),
@@ -57,7 +57,7 @@ function normalizeVectorMatches(value: unknown): AgentVectorMatch[] {
     return {
       id: `vec_${index + 1}`,
       nodeId: "retrieve_context",
-      provider: "qdrant",
+      provider: "chroma",
       collection: "default",
       title: `知识片段 ${index + 1}`,
       contentPreview: String(match),
