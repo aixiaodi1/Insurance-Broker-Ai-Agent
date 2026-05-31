@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     embedding_model: str = "shibing624/text2vec-base-chinese"
     embedding_dimension: int = 768
     embedding_batch_size: int = 32
+    rerank_api_base_url: str = ""
+    rerank_api_path: str = "/v1/rerank"
+    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    rag_rerank_top_k: int = 5
+    llm_api_base_url: str = ""
+    llm_api_path: str = "/chat/completions"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_provider: str = "llm"
+    rag_retrieval_top_k: int = 20
     chunk_size: int = 500
     chunk_overlap: int = 50
     max_upload_mb: int = 50
