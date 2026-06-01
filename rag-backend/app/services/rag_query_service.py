@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import re
 from datetime import UTC, datetime
@@ -65,11 +66,12 @@ class RagQueryService:
         cached = self._cache.get(cache_key)
         if cached is not None:
             logger.info("cache_hit", extra={"extra_fields": {"run_id": run_id, "cache_key": cache_key}})
-            cached["id"] = run_id
-            cached["startedAt"] = started_at
-            cached["finishedAt"] = datetime.now(UTC).isoformat()
-            cached["latencyMs"] = int((perf_counter() - timer) * 1000)
-            return cached
+            response = copy.deepcopy(cached)
+            response["id"] = run_id
+            response["startedAt"] = started_at
+            response["finishedAt"] = datetime.now(UTC).isoformat()
+            response["latencyMs"] = int((perf_counter() - timer) * 1000)
+            return response
 
         step_start = perf_counter()
         intent = self._analyze_intent(query)
@@ -123,7 +125,15 @@ class RagQueryService:
         if self._cross_encoder is not None and self._bm25_indexer is not None and self._repository is not None:
             vector_matches = self._run_dual_pipeline(intent["query"], vector_matches, collection)
         else:
-            vector_matches = self._run_legacy_pipeline(intent["query"], vector_matches, nodes, events, run_id, started_at)
+            vector_matches = self._run_legacy_pipeline(
+                intent["query"],
+                vector_matches,
+                collection,
+                nodes,
+                events,
+                run_id,
+                started_at,
+            )
 
         if not vector_matches:
             final_answer = "知识库中没有足够依据回答这个问题。"
@@ -234,6 +244,7 @@ class RagQueryService:
         self,
         query: str,
         vector_matches: list[dict],
+        collection: str,
         nodes: list[dict],
         events: list[dict],
         run_id: str,
@@ -258,7 +269,7 @@ class RagQueryService:
         )
 
         step_start = perf_counter()
-        vector_matches = self._expand_parent_context("", vector_matches)
+        vector_matches = self._expand_parent_context(collection, vector_matches)
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
         self._append_step(nodes, events, run_id, "expand_parent_context", "Expand parent context", started_at,
                           f"Expanded {len(vector_matches)} reranked chunks with neighboring parent context. ({step_elapsed_ms}ms)",

@@ -13,6 +13,7 @@ class FakeEmbedder:
 class FakeVectorStore:
     def __init__(self) -> None:
         self.n_results: int | None = None
+        self.get_chunks_collections: list[str] = []
 
     def query_chunks(self, collection: str, embedding: list[float], n_results: int = 5) -> list[dict]:
         self.n_results = n_results
@@ -32,6 +33,7 @@ class FakeVectorStore:
         ]
 
     def get_chunks_by_ids(self, collection: str, ids: list[str]) -> list[dict]:
+        self.get_chunks_collections.append(collection)
         return []
 
 
@@ -97,6 +99,25 @@ def test_rag_query_service_runs_full_pipeline_with_rerank_generation_and_citatio
     ]
     verify_event = next(event for event in result["events"] if event["nodeId"] == "verify_citations")
     assert verify_event["payload"]["validCitationIds"] == [1]
+    assert vector_store.get_chunks_collections == ["guides", "guides"]
+
+
+def test_rag_query_service_cache_hit_does_not_mutate_cached_response() -> None:
+    embedder = FakeEmbedder()
+    service = RagQueryService(
+        embedder=embedder,
+        vector_store=FakeVectorStore(),
+        reranker=FakeReranker(),
+        generator=FakeGenerator(),
+        embedding_dimension=2,
+    )
+
+    first = service.run(prompt="What can be claimed?", collection="guides", agent_id="research-agent", thread_id="t1")
+    second = service.run(prompt="What can be claimed?", collection="guides", agent_id="research-agent", thread_id="t1")
+
+    assert first["id"] != second["id"]
+    assert first["id"] == first["events"][0]["id"].split("_evt_")[0]
+    assert embedder.texts == ["What can be claimed?"]
 
 
 def test_rag_query_service_returns_insufficient_context_answer_without_generation() -> None:
@@ -140,6 +161,7 @@ def test_rag_query_service_expands_reranked_chunk_with_neighbor_parent_context()
             ]
 
         def get_chunks_by_ids(self, collection: str, ids: list[str]) -> list[dict]:
+            assert collection == "default"
             assert "doc_clause:39" in ids
             return [
                 {
