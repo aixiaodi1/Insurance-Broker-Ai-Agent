@@ -142,7 +142,7 @@ const deleteAllButton = document.querySelector("#delete-all-vectors");
 
 function renderCollectionItem(name) {
   const row = document.createElement("div");
-  row.className = "item";
+  row.className = "item item-row";
 
   const title = document.createElement("p");
   title.className = "item-title";

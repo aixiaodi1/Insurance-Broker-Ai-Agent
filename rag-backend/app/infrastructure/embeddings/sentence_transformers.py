@@ -11,14 +11,21 @@ class SentenceTransformersEmbeddingProvider:
         model_name: str,
         batch_size: int,
         model_cls: Callable[..., Any] | None = None,
+        model: object | None = None,
     ) -> None:
         if batch_size <= 0:
             raise NonRetryableIngestionError("Embedding batch size must be greater than zero.")
 
         self._model_name = model_name
         self._batch_size = batch_size
-        self._model_cls = model_cls or _load_sentence_transformer_cls()
-        self._model = self._model_cls(model_name)
+        if model is not None:
+            self._model = model
+        else:
+            self._model_cls = model_cls or _load_sentence_transformer_cls()
+            try:
+                self._model = self._model_cls(model_name, local_files_only=True)
+            except TypeError:
+                self._model = self._model_cls(model_name)
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         embeddings: list[list[float]] = []

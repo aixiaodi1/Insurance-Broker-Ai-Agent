@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     rerank_api_base_url: str = ""
     rerank_api_path: str = "/v1/rerank"
     rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    cross_encoder_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     rag_rerank_top_k: int = 5
+    parent_chunk_size: int = 1500
     llm_api_base_url: str = ""
     llm_api_path: str = "/chat/completions"
     llm_api_key: str = ""

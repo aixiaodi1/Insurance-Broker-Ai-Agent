@@ -5,9 +5,10 @@ from app.infrastructure.embeddings.local_api import LocalApiEmbeddingProvider
 
 
 class FakeSentenceTransformersEmbeddingProvider:
-    def __init__(self, model_name: str, batch_size: int) -> None:
+    def __init__(self, model_name: str, batch_size: int, model: object | None = None) -> None:
         self.model_name = model_name
         self.batch_size = batch_size
+        self.model = model
 
 
 def test_build_embedder_defaults_to_sentence_transformers(monkeypatch) -> None:

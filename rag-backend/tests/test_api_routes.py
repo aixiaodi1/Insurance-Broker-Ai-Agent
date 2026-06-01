@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
-from app.dependencies import get_document_service, get_embedder, get_queue_client, get_repository, get_vector_store
+from app.dependencies import get_document_service, get_embedder, get_queue_client, get_rag_query_service, get_repository, get_vector_store
+from app.services.rag_query_service import RagQueryService
 from app.domain import DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus
 from app.errors import ValidationError
 from app.main import create_app
@@ -459,12 +460,31 @@ def test_health_degrades_when_embedding_health_check_fails_without_leaking_error
     assert embedder.called is False
 
 
+class _AgentTestFakeReranker:
+    def rerank(self, query: str, documents: list[str], top_k: int | None = None) -> list[dict]:
+        return [{"index": 0, "document": documents[0], "score": 0.91}]
+
+
+class _AgentTestFakeGenerator:
+    def generate(self, prompt: str) -> dict:
+        return {"answer": "Insurance responsibility includes the claim context. [1]"}
+
+
 def test_agent_run_queries_shared_chroma_collection() -> None:
     embedder = FakeEmbedder()
     client = make_client(
         {
             get_embedder: lambda: embedder,
             get_vector_store: lambda: FakeVectorStore(),
+            get_rag_query_service: lambda: RagQueryService(
+                embedder=embedder,
+                vector_store=FakeVectorStore(),
+                reranker=_AgentTestFakeReranker(),
+                generator=_AgentTestFakeGenerator(),
+                retrieval_top_k=20,
+                rerank_top_k=5,
+                embedding_dimension=1,
+            ),
         }
     )
 
@@ -489,4 +509,4 @@ def test_agent_run_queries_shared_chroma_collection() -> None:
     assert body["vectorMatches"][0]["provider"] == "chroma"
     assert body["vectorMatches"][0]["collection"] == "guides"
     assert body["vectorMatches"][0]["metadata"]["document_type"] == "insurance_clause"
-    assert body["nodes"][1]["id"] == "retrieve_context"
+    assert body["nodes"][2]["id"] == "retrieve_context"

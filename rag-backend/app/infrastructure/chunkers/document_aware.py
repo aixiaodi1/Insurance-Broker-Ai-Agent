@@ -184,6 +184,19 @@ class DocumentAwareChunker:
                 break
         return chunks
 
+    def dual_split(
+        self,
+        text: str,
+        parent_chunk_size: int = 1500,
+    ) -> tuple[list[TextChunk], list[TextChunk]]:
+        parent_chunker = DocumentAwareChunker(
+            chunk_size=parent_chunk_size,
+            chunk_overlap=self.chunk_overlap,
+        )
+        parents = parent_chunker.split(text)
+        children = self.split(text)
+        return (parents, children)
+
     def _reindex(self, chunks: Iterable[TextChunk]) -> list[TextChunk]:
         return [
             TextChunk(

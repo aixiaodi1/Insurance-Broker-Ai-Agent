@@ -170,6 +170,16 @@ button:disabled {
   padding: 14px 16px;
 }
 
+.item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toolbar + .stack .item-row {
+  padding-right: 6px;
+}
+
 .item-title {
   margin: 0 0 6px;
   font-weight: 700;

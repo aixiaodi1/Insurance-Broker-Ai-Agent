@@ -7,10 +7,12 @@ dependencies = [
   "chromadb",
   "fastapi",
   "httpx",
+  "jieba",
   "jinja2",
   "pydantic-settings",
   "pypdf",
   "python-multipart",
+  "rank_bm25",
   "redis",
   "rq",
   "uvicorn[standard]"

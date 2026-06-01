@@ -23,10 +23,26 @@ from app.infrastructure.repositories.base import Repository
 from app.infrastructure.repositories.sqlite import SQLiteRepository
 from app.infrastructure.vectorstores.base import VectorStore
 from app.infrastructure.vectorstores.chroma_store import ChromaVectorStore
+from app.retrieval.bm25_indexer import MemoryBM25Indexer
 from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
 from app.services.job_service import JobService
 from app.services.rag_query_service import RagQueryService
+
+app_state: dict = {}
+
+
+def set_app_state(state: dict) -> None:
+    app_state.clear()
+    app_state.update(state)
+
+
+def get_cross_encoder():
+    return app_state.get("cross_encoder")
+
+
+def get_bm25_indexer() -> MemoryBM25Indexer | None:
+    return app_state.get("bm25_indexer")
 
 
 def get_settings() -> Settings:
@@ -84,9 +100,11 @@ def build_embedder(settings: Settings) -> EmbeddingProvider:
             batch_size=settings.embedding_batch_size,
         )
 
+    preloaded = app_state.get("embedding_model")
     return SentenceTransformersEmbeddingProvider(
         model_name=settings.embedding_model,
         batch_size=settings.embedding_batch_size,
+        model=preloaded,
     )
 
 
@@ -148,11 +166,27 @@ def get_ingestion_service() -> IngestionService:
         chunker=get_chunker(),
         embedding_provider=get_embedder(),
         vector_store=get_vector_store(),
+        bm25_indexer=get_bm25_indexer(),
     )
 
 
 def get_rag_query_service() -> RagQueryService:
     settings = get_settings()
+    cross_encoder = get_cross_encoder()
+    bm25_indexer = get_bm25_indexer()
+    if cross_encoder and bm25_indexer:
+        return RagQueryService(
+            embedder=get_embedder(),
+            vector_store=get_vector_store(),
+            generator=get_answer_generator(),
+            repository=get_repository(),
+            cross_encoder=cross_encoder,
+            bm25_indexer=bm25_indexer,
+            llm_provider=settings.llm_provider,
+            retrieval_top_k=min(settings.rag_retrieval_top_k, 10),
+            rerank_top_k=3,
+            embedding_dimension=settings.embedding_dimension,
+        )
     return RagQueryService(
         embedder=get_embedder(),
         vector_store=get_vector_store(),

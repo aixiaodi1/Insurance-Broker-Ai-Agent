@@ -4,6 +4,9 @@ from functools import lru_cache
 from math import isfinite
 from typing import Any
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -41,7 +44,22 @@ def create_model_api_app(
     embedding_model = LazyModel(embedding_model_factory or _sentence_transformer_factory(embedding_model_name))
     rerank_model = LazyModel(rerank_model_factory or _cross_encoder_factory(rerank_model_name))
 
-    app = FastAPI(title="Local RAG Model API", version="0.1.0")
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        print("[model_api] Preloading embedding model...")
+        try:
+            embedding_model.get()
+        except Exception as exc:
+            print(f"[model_api] Embedding model preload failed: {exc}")
+        print("[model_api] Preloading cross-encoder model...")
+        try:
+            rerank_model.get()
+        except Exception as exc:
+            print(f"[model_api] Cross-encoder model preload failed: {exc}")
+        print("[model_api] Models ready.")
+        yield
+
+    app = FastAPI(title="Local RAG Model API", version="0.1.0", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -133,8 +151,8 @@ class _TransformersEmbeddingModel:
         from transformers import AutoModel, AutoTokenizer
 
         self._torch = torch
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModel.from_pretrained(model_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        self._model = AutoModel.from_pretrained(model_name, local_files_only=True)
         self._max_length = _resolve_model_max_length(self._tokenizer, self._model)
         self._model.eval()
 
@@ -162,8 +180,8 @@ class _TransformersRerankModel:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         self._torch = torch
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        self._model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
         self._model.eval()
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
