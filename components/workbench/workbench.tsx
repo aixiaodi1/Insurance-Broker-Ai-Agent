@@ -50,7 +50,7 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
           prompt: trimmedPrompt,
           agentId: "research-agent",
           threadId: String(run.requestJson.threadId ?? "thread_debug"),
-          vectorProvider: "qdrant",
+          vectorProvider: "chroma",
           debug: true
         },
         { mode: apiMode }

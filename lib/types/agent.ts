@@ -47,7 +47,7 @@ export interface AgentToolCall {
 export interface AgentVectorMatch {
   id: string;
   nodeId: string;
-  provider: "tencent-vectordb" | "qdrant";
+  provider: "tencent-vectordb" | "chroma";
   collection: string;
   score?: number;
   title: string;
@@ -83,7 +83,7 @@ export interface CreateAgentRunInput {
   prompt: string;
   agentId: string;
   threadId?: string;
-  vectorProvider: "tencent-vectordb" | "qdrant";
+  vectorProvider: "tencent-vectordb" | "chroma";
   debug: boolean;
 }
 

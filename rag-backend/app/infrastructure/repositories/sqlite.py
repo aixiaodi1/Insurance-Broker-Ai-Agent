@@ -60,10 +60,77 @@ class SQLiteRepository:
                     source_file TEXT NOT NULL,
                     upload_time TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    parent_id TEXT,
+                    type TEXT DEFAULT 'child',
                     FOREIGN KEY (document_id) REFERENCES documents(id)
                 );
                 """
             )
+            self._migrate_chunks(connection)
+
+    def _migrate_chunks(self, connection: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in connection.execute("PRAGMA table_info(chunks)").fetchall()}
+        if "parent_id" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN parent_id TEXT")
+        if "type" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN type TEXT DEFAULT 'child'")
+
+    def store_parent_chunk(
+        self,
+        id: str,
+        document_id: str,
+        collection: str,
+        text: str,
+        chunk_index: int,
+    ) -> None:
+        created_at = self._now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO chunks (
+                    id, document_id, collection, chunk_index, chroma_id,
+                    content_preview, token_count, source_file, upload_time,
+                    created_at, parent_id, type
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    id,
+                    document_id,
+                    collection,
+                    chunk_index,
+                    id,
+                    text,
+                    len(text),
+                    document_id,
+                    created_at,
+                    created_at,
+                    None,
+                    "parent",
+                ),
+            )
+
+    def get_parent_chunk(self, parent_id: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT content_preview FROM chunks WHERE id = ? AND type = 'parent'",
+                (parent_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["content_preview"]
+
+    def list_all_child_texts(self) -> list[str]:
+        with self._connection() as connection:
+            try:
+                rows = connection.execute(
+                    "SELECT content_preview FROM chunks WHERE type = 'child' OR type IS NULL"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = connection.execute(
+                    "SELECT content_preview FROM chunks"
+                ).fetchall()
+        return [row["content_preview"] for row in rows]
 
     def create_document(
         self,
@@ -257,6 +324,8 @@ class SQLiteRepository:
                 chunk["source_file"],
                 chunk["upload_time"],
                 created_at,
+                chunk.get("parent_id"),
+                chunk.get("type", "child"),
             )
             for chunk in chunks
         ]
@@ -266,9 +335,10 @@ class SQLiteRepository:
                 """
                 INSERT INTO chunks (
                     id, document_id, collection, chunk_index, chroma_id,
-                    content_preview, token_count, source_file, upload_time, created_at
+                    content_preview, token_count, source_file, upload_time,
+                    created_at, parent_id, type
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )

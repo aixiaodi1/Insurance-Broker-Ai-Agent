@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -63,3 +63,4 @@ class TextChunk:
     chunk_index: int
     text: str
     token_count: int
+    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)

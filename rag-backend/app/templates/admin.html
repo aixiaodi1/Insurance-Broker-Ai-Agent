@@ -53,6 +53,19 @@
           </div>
           <div id="document-list" class="stack" data-documents-endpoint="/documents">尚未加载文档。</div>
         </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <p class="section-number">04</p>
+            <h2>向量库管理</h2>
+          </div>
+          <div class="toolbar">
+            <p class="hint">查看并删除 ChromaDB 中的向量数据。</p>
+            <button id="refresh-collections" type="button" class="secondary">刷新</button>
+          </div>
+          <div id="collection-list" class="stack" data-collections-endpoint="/collections">尚未加载。</div>
+          <button id="delete-all-vectors" type="button" class="danger" style="margin-top:14px">删除全部向量内容</button>
+        </article>
       </section>
     </main>
 

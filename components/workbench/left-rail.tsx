@@ -51,7 +51,7 @@ export function LeftRail({ apiMode, run, onModeChange }: LeftRailProps) {
           </div>
           <div>
             <dt>向量库</dt>
-            <dd>{String(run.requestJson.vectorProvider ?? "qdrant")}</dd>
+            <dd>{String(run.requestJson.vectorProvider ?? "chroma")}</dd>
           </div>
           <div>
             <dt>状态</dt>

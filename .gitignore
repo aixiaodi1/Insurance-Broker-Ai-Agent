@@ -10,6 +10,7 @@ coverage/
 .superpowers/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 rag-backend/.venv/
 rag-backend/data/

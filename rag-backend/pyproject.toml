@@ -7,10 +7,12 @@ dependencies = [
   "chromadb",
   "fastapi",
   "httpx",
+  "jieba",
   "jinja2",
   "pydantic-settings",
   "pypdf",
   "python-multipart",
+  "rank_bm25",
   "redis",
   "rq",
   "uvicorn[standard]"
@@ -21,6 +23,12 @@ dev = [
   "pytest",
   "pytest-httpx"
 ]
+local-embeddings = [
+  "sentence-transformers"
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

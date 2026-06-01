@@ -33,7 +33,7 @@ export const mockAgentRun: AgentRun = {
       startedAt: "2026-05-23T06:10:00.130Z",
       finishedAt: "2026-05-23T06:10:00.740Z",
       durationMs: 610,
-      stateSummary: "从 qdrant 的 knowledge_base 集合读取到 3 条相关片段。"
+      stateSummary: "从 chroma 的 knowledge_base 集合读取到 3 条相关片段。"
     },
     {
       id: "call_tool",
@@ -80,7 +80,7 @@ export const mockAgentRun: AgentRun = {
       timestamp: "2026-05-23T06:10:00.720Z",
       title: "向量检索返回 3 条结果",
       detail: "最高分片段解释了为什么先检索再调用工具。",
-      payload: { provider: "qdrant", collection: "knowledge_base", matches: 3 }
+      payload: { provider: "chroma", collection: "knowledge_base", matches: 3 }
     },
     {
       id: "evt_tool",
@@ -128,7 +128,7 @@ export const mockAgentRun: AgentRun = {
     {
       id: "vec_001",
       nodeId: "retrieve_context",
-      provider: "qdrant",
+      provider: "chroma",
       collection: "knowledge_base",
       score: 0.92,
       title: "LangGraph 路由策略",
@@ -141,7 +141,7 @@ export const mockAgentRun: AgentRun = {
     {
       id: "vec_002",
       nodeId: "retrieve_context",
-      provider: "qdrant",
+      provider: "chroma",
       collection: "knowledge_base",
       score: 0.87,
       title: "轨迹检查工具协议",
@@ -156,7 +156,7 @@ export const mockAgentRun: AgentRun = {
     prompt: "帮我检查 LangGraph Agent 为什么先检索再调用工具。",
     agentId: "research-agent",
     threadId: "thread_mock_001",
-    vectorProvider: "qdrant",
+    vectorProvider: "chroma",
     debug: true
   },
   responseJson: {

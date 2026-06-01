@@ -135,3 +135,93 @@ uploadForm.addEventListener("submit", async (event) => {
 
 refreshDocumentsButton.addEventListener("click", refreshDocuments);
 refreshDocuments();
+
+const collectionList = document.querySelector("#collection-list");
+const refreshCollectionsButton = document.querySelector("#refresh-collections");
+const deleteAllButton = document.querySelector("#delete-all-vectors");
+
+function renderCollectionItem(name) {
+  const row = document.createElement("div");
+  row.className = "item item-row";
+
+  const title = document.createElement("p");
+  title.className = "item-title";
+  title.textContent = name;
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "danger-small";
+  deleteBtn.textContent = "删除";
+  deleteBtn.addEventListener("click", async () => {
+    if (!window.confirm(`确认删除向量库「${name}」？此操作不可恢复。`)) return;
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = "删除中...";
+    try {
+      const resp = await fetch(`/collections/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "删除失败");
+      await refreshCollections();
+    } catch (err) {
+      alert(`删除失败: ${err.message}`);
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = "删除";
+    }
+  });
+
+  row.append(title, deleteBtn);
+  return row;
+}
+
+async function refreshCollections() {
+  collectionList.textContent = "正在加载...";
+  try {
+    const resp = await fetch(collectionList.dataset.collectionsEndpoint);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "加载失败");
+    collectionList.textContent = "";
+    const collections = data.collections || [];
+    if (collections.length === 0) {
+      collectionList.textContent = "暂无向量库。";
+      return;
+    }
+    for (const name of collections) {
+      collectionList.append(renderCollectionItem(name));
+    }
+  } catch (err) {
+    collectionList.textContent = `加载失败: ${err.message}`;
+  }
+}
+
+refreshCollectionsButton.addEventListener("click", refreshCollections);
+refreshCollections();
+
+deleteAllButton.addEventListener("click", async () => {
+  let collections = [];
+  try {
+    const resp = await fetch(collectionList.dataset.collectionsEndpoint);
+    const data = await resp.json();
+    collections = data.collections || [];
+  } catch {
+    alert("无法获取向量库列表");
+    return;
+  }
+  if (collections.length === 0) {
+    alert("没有可删除的向量库。");
+    return;
+  }
+  if (!window.confirm(`确认删除全部 ${collections.length} 个向量库？\n${collections.join(", ")}\n\n此操作不可恢复！`)) return;
+
+  deleteAllButton.disabled = true;
+  deleteAllButton.textContent = "删除中...";
+  let deleted = 0;
+  for (const name of collections) {
+    try {
+      const resp = await fetch(`/collections/${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (resp.ok) deleted++;
+    } catch {}
+  }
+  deleteAllButton.disabled = false;
+  deleteAllButton.textContent = "删除全部向量内容";
+  alert(`已删除 ${deleted}/${collections.length} 个向量库。`);
+  await refreshCollections();
+});
