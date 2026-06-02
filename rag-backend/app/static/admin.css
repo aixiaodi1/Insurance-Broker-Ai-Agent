@@ -242,6 +242,77 @@ button:disabled {
   opacity: 0.65;
 }
 
+.debug-response {
+  max-height: 400px;
+  overflow: auto;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.debug-evidence {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-top: 12px;
+  background: #fffdf8;
+}
+
+.debug-evidence summary {
+  cursor: pointer;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.debug-evidence pre {
+  margin: 4px 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+}
+
+.evidence-section {
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.evidence-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.evidence-section h4 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  color: var(--accent-dark);
+}
+
+.evidence-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+.tag-valid {
+  background: #e6f5ed;
+  color: var(--success);
+}
+
+.tag-warning {
+  background: #fef3e2;
+  color: var(--accent);
+}
+
+.tag-danger {
+  background: #fbe9e7;
+  color: var(--danger);
+}
+
 @media (max-width: 760px) {
   .admin-shell {
     width: min(100% - 20px, 560px);

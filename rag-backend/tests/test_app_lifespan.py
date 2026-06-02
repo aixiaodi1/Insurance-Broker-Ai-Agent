@@ -26,6 +26,7 @@ def test_app_shutdown_closes_cached_vector_store(monkeypatch, tmp_path: Path) ->
             upload_dir=tmp_path / "uploads",
             chroma_persist_dir=tmp_path / "chroma",
             embedding_api_base_url="http://localhost:9000",
+            preload_embedding_model=False,
         ),
     )
     monkeypatch.setattr(dependencies, "ChromaVectorStore", lambda persist_dir: store)

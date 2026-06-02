@@ -1,10 +1,11 @@
 from pathlib import Path
 
-from app.domain import JobStage
+from app.domain import JobStage, ParseStatus
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
 from app.infrastructure.chunkers.base import Chunker
 from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.parsers.base import DocumentParser
+from app.infrastructure.parsers.quality_gate import ParseQualityGate
 from app.infrastructure.repositories.base import Repository
 from app.infrastructure.vectorstores.base import VectorStore
 from app.retrieval.bm25_indexer import MemoryBM25Indexer
@@ -25,6 +26,7 @@ class IngestionService:
         embedding_provider: EmbeddingProvider,
         vector_store: VectorStore,
         bm25_indexer: MemoryBM25Indexer | None = None,
+        quality_gate: ParseQualityGate | None = None,
     ) -> None:
         self.repository = repository
         self.job_service = job_service
@@ -33,6 +35,7 @@ class IngestionService:
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
         self.bm25_indexer = bm25_indexer
+        self.quality_gate = quality_gate or ParseQualityGate()
 
     def ingest_document(self, job_id: str, document_id: str, collection: str) -> None:
         try:
@@ -41,7 +44,31 @@ class IngestionService:
 
             self.repository.mark_document_indexing(document_id)
             self.job_service.mark_running(job_id, JobStage.PARSING, 20)
-            parsed_text = self.parser.parse(source_path)
+
+            parse_with_report = getattr(self.parser, "parse_with_report", None)
+            if parse_with_report is not None:
+                parsed_text, parse_report = parse_with_report(source_path)
+                if parse_report is not None:
+                    self._log_parse_report(document_id, parse_report)
+                    if not self.quality_gate.evaluate(parse_report):
+                        logger.warning(
+                            "parse_quality_gate_blocked",
+                            extra={"extra_fields": {
+                                "document_id": document_id,
+                                "quality_score": parse_report.quality_score,
+                                "warnings": [str(w) for w in parse_report.warnings],
+                            }},
+                        )
+                        reason = "quality_gate_blocked"
+                        if parse_report.quality_score < self.quality_gate.MIN_QUALITY_SCORE:
+                            reason = f"low_quality_score_{parse_report.quality_score}"
+                        elif parse_report.parse_status == ParseStatus.FAILED:
+                            reason = "parse_failed"
+                        raise NonRetryableIngestionError(
+                            f"Document rejected by quality gate: {reason}"
+                        )
+            else:
+                parsed_text = self.parser.parse(source_path)
 
             if not parsed_text.strip():
                 raise NonRetryableIngestionError("Parsed document text is empty.")
@@ -110,6 +137,9 @@ class IngestionService:
                 "upload_time": document.created_at,
                 "source": "upload",
                 "content_hash": document.content_hash,
+                "section_no": chunk.metadata.get("section_no", ""),
+                "section_title": chunk.metadata.get("section_title", ""),
+                "content_type": chunk.metadata.get("content_type", ""),
                 **chunk.metadata,
             }
             for chunk in chunks
@@ -135,6 +165,9 @@ class IngestionService:
                     "token_count": chunk.token_count,
                     "source_file": document.filename,
                     "upload_time": document.created_at,
+                    "section_no": chunk.metadata.get("section_no", ""),
+                    "section_title": chunk.metadata.get("section_title", ""),
+                    "content_type": chunk.metadata.get("content_type", ""),
                 }
                 for chunk, chroma_id in zip(chunks, ids, strict=True)
             ],
@@ -179,6 +212,9 @@ class IngestionService:
                 collection=collection,
                 text=parent.text,
                 chunk_index=p_idx,
+                section_no=parent.metadata.get("section_no", None),
+                section_title=parent.metadata.get("section_title", None),
+                content_type=parent.metadata.get("content_type", None),
             )
 
         def _assign_parent(child_index: int, total_children: int, total_parents: int) -> int:
@@ -201,6 +237,9 @@ class IngestionService:
                 "content_hash": document.content_hash,
                 "parent_id": f"{document_id}:parent:{_assign_parent(c_idx, len(children), len(parents))}",
                 "type": "child",
+                "section_no": child.metadata.get("section_no", ""),
+                "section_title": child.metadata.get("section_title", ""),
+                "content_type": child.metadata.get("content_type", ""),
                 **child.metadata,
             }
             for c_idx, child in enumerate(children)
@@ -219,28 +258,62 @@ class IngestionService:
             metadatas=child_metadatas,
         )
 
+        chunk_dicts = [
+            {
+                "chunk_index": child.chunk_index,
+                "chroma_id": child_ids[i],
+                "content_preview": child.text[:200],
+                "content_text": child.text,
+                "token_count": child.token_count,
+                "source_file": document.filename,
+                "upload_time": document.created_at,
+                "parent_id": child_metadatas[i]["parent_id"],
+                "type": "child",
+                "section_no": child.metadata.get("section_no", ""),
+                "section_title": child.metadata.get("section_title", ""),
+                "content_type": child.metadata.get("content_type", ""),
+            }
+            for i, child in enumerate(children)
+        ]
         self.repository.replace_chunks(
             document_id=document_id,
             collection=collection,
-            chunks=[
-                {
-                    "chunk_index": child.chunk_index,
-                    "chroma_id": child_ids[i],
-                    "content_preview": child.text[:200],
-                    "token_count": child.token_count,
-                    "source_file": document.filename,
-                    "upload_time": document.created_at,
-                    "parent_id": child_metadatas[i]["parent_id"],
-                    "type": "child",
-                }
-                for i, child in enumerate(children)
-            ],
+            chunks=chunk_dicts,
         )
 
-        for child_text in child_texts:
-            self.bm25_indexer.add(child_text)
+        for cd in chunk_dicts:
+            self.bm25_indexer.add({
+                "id": cd["chroma_id"],
+                "text": cd["content_text"],
+                "collection": collection,
+                "metadata": {
+                    "parent_id": cd["parent_id"] or "",
+                    "section_no": cd.get("section_no", ""),
+                    "section_title": cd.get("section_title", ""),
+                    "content_type": cd.get("content_type", ""),
+                    "type": "child",
+                },
+            })
 
         return len(children)
+
+    def _log_parse_report(self, document_id: str, report: object) -> None:
+        try:
+            logger.info(
+                "parse_report",
+                extra={"extra_fields": {
+                    "document_id": document_id,
+                    "parser": getattr(report, "parser_name", "unknown"),
+                    "status": getattr(report, "parse_status", "unknown"),
+                    "quality_score": getattr(report, "quality_score", 0.0),
+                    "total_pages": getattr(report, "total_pages", 0),
+                    "total_lines": getattr(report, "total_lines", 0),
+                    "warnings": [str(w) for w in getattr(report, "warnings", [])],
+                    "needs_ocr": getattr(report, "needs_ocr", False),
+                }},
+            )
+        except Exception:
+            pass
 
     def mark_retry_exhausted(self, job_id: str, document_id: str, error: str) -> None:
         sanitized_error = sanitize_error_message(error)

@@ -62,6 +62,11 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL,
                     parent_id TEXT,
                     type TEXT DEFAULT 'child',
+                    section_no TEXT,
+                    section_title TEXT,
+                    content_type TEXT,
+                    page_start INTEGER,
+                    page_end INTEGER,
                     FOREIGN KEY (document_id) REFERENCES documents(id)
                 );
                 """
@@ -74,6 +79,18 @@ class SQLiteRepository:
             connection.execute("ALTER TABLE chunks ADD COLUMN parent_id TEXT")
         if "type" not in existing:
             connection.execute("ALTER TABLE chunks ADD COLUMN type TEXT DEFAULT 'child'")
+        if "section_no" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN section_no TEXT")
+        if "section_title" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN section_title TEXT")
+        if "content_type" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN content_type TEXT")
+        if "page_start" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN page_start INTEGER")
+        if "page_end" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN page_end INTEGER")
+        if "content_text" not in existing:
+            connection.execute("ALTER TABLE chunks ADD COLUMN content_text TEXT")
 
     def store_parent_chunk(
         self,
@@ -82,6 +99,11 @@ class SQLiteRepository:
         collection: str,
         text: str,
         chunk_index: int,
+        section_no: str | None = None,
+        section_title: str | None = None,
+        content_type: str | None = None,
+        page_start: int | None = None,
+        page_end: int | None = None,
     ) -> None:
         created_at = self._now()
         with self._connection() as connection:
@@ -90,9 +112,11 @@ class SQLiteRepository:
                 INSERT INTO chunks (
                     id, document_id, collection, chunk_index, chroma_id,
                     content_preview, token_count, source_file, upload_time,
-                    created_at, parent_id, type
+                    created_at, parent_id, type,
+                    section_no, section_title, content_type,
+                    page_start, page_end, content_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     id,
@@ -100,25 +124,61 @@ class SQLiteRepository:
                     collection,
                     chunk_index,
                     id,
-                    text,
+                    text[:200],
                     len(text),
                     document_id,
                     created_at,
                     created_at,
                     None,
                     "parent",
+                    section_no,
+                    section_title,
+                    content_type,
+                    page_start,
+                    page_end,
+                    text,
                 ),
             )
 
     def get_parent_chunk(self, parent_id: str) -> str | None:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT content_preview FROM chunks WHERE id = ? AND type = 'parent'",
+                "SELECT COALESCE(content_text, content_preview) AS content_text FROM chunks WHERE id = ? AND type = 'parent'",
                 (parent_id,),
             ).fetchone()
         if row is None:
             return None
-        return row["content_preview"]
+        return row["content_text"]
+
+    def list_all_chunks_for_bm25(self) -> list[dict]:
+        with self._connection() as connection:
+            try:
+                rows = connection.execute(
+                    "SELECT id, COALESCE(content_text, content_preview) AS content_text, collection, parent_id, section_no, section_title, content_type, page_start, page_end, type, document_id FROM chunks"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = connection.execute(
+                    "SELECT id, content_preview AS content_text, collection, parent_id, section_no, section_title, content_type, page_start, page_end, type, document_id FROM chunks"
+                ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "text": row["content_text"] or "",
+                "collection": row["collection"],
+                "metadata": {
+                    "parent_id": row["parent_id"] or "",
+                    "section_no": row["section_no"] or "",
+                    "section_title": row["section_title"] or "",
+                    "content_type": row["content_type"] or "",
+                    "page_start": row["page_start"],
+                    "page_end": row["page_end"],
+                    "type": row["type"] or "child",
+                    "document_id": row["document_id"],
+                },
+            }
+            for row in rows
+            if row["content_text"] and row["content_text"].strip()
+        ]
 
     def list_all_child_texts(self) -> list[str]:
         with self._connection() as connection:
@@ -319,13 +379,19 @@ class SQLiteRepository:
                 collection,
                 chunk["chunk_index"],
                 chunk["chroma_id"],
-                chunk["content_preview"],
+                chunk["content_preview"][:200] if chunk["content_preview"] is not None else None,
                 chunk["token_count"],
                 chunk["source_file"],
                 chunk["upload_time"],
                 created_at,
                 chunk.get("parent_id"),
                 chunk.get("type", "child"),
+                chunk.get("section_no"),
+                chunk.get("section_title"),
+                chunk.get("content_type"),
+                chunk.get("page_start"),
+                chunk.get("page_end"),
+                chunk.get("content_text") or chunk.get("content_preview"),
             )
             for chunk in chunks
         ]
@@ -336,9 +402,11 @@ class SQLiteRepository:
                 INSERT INTO chunks (
                     id, document_id, collection, chunk_index, chroma_id,
                     content_preview, token_count, source_file, upload_time,
-                    created_at, parent_id, type
+                    created_at, parent_id, type,
+                    section_no, section_title, content_type,
+                    page_start, page_end, content_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )

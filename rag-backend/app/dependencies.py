@@ -14,7 +14,8 @@ from app.infrastructure.embeddings.sentence_transformers import SentenceTransfor
 from app.infrastructure.generators.base import AnswerGenerator
 from app.infrastructure.generators.minimax import MiniMaxGenerator
 from app.infrastructure.parsers.base import DocumentParser
-from app.infrastructure.parsers.registry import ParserRegistry
+from app.infrastructure.parsers.quality_gate import ParseQualityGate
+from app.infrastructure.parsers.router import ParserRouter
 from app.infrastructure.queue.base import QueueClient
 from app.infrastructure.queue.rq_queue import RqQueueClient
 from app.infrastructure.rerankers.base import Reranker
@@ -58,8 +59,8 @@ def get_repository() -> Repository:
 
 
 @lru_cache
-def get_parser_registry() -> DocumentParser:
-    return ParserRegistry.default()
+def get_parser_registry() -> ParserRouter:
+    return ParserRouter.default()
 
 
 @lru_cache
@@ -167,6 +168,7 @@ def get_ingestion_service() -> IngestionService:
         embedding_provider=get_embedder(),
         vector_store=get_vector_store(),
         bm25_indexer=get_bm25_indexer(),
+        quality_gate=ParseQualityGate(),
     )
 
 
@@ -174,17 +176,18 @@ def get_rag_query_service() -> RagQueryService:
     settings = get_settings()
     cross_encoder = get_cross_encoder()
     bm25_indexer = get_bm25_indexer()
-    if cross_encoder and bm25_indexer:
+    if bm25_indexer is not None:
         return RagQueryService(
             embedder=get_embedder(),
             vector_store=get_vector_store(),
             generator=get_answer_generator(),
             repository=get_repository(),
             cross_encoder=cross_encoder,
+            reranker=get_reranker() if cross_encoder is None else None,
             bm25_indexer=bm25_indexer,
             llm_provider=settings.llm_provider,
-            retrieval_top_k=min(settings.rag_retrieval_top_k, 10),
-            rerank_top_k=3,
+            retrieval_top_k=min(settings.rag_retrieval_top_k, 10) if cross_encoder else settings.rag_retrieval_top_k,
+            rerank_top_k=3 if cross_encoder else settings.rag_rerank_top_k,
             embedding_dimension=settings.embedding_dimension,
         )
     return RagQueryService(

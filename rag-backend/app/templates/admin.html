@@ -66,6 +66,27 @@
           <div id="collection-list" class="stack" data-collections-endpoint="/collections">尚未加载。</div>
           <button id="delete-all-vectors" type="button" class="danger" style="margin-top:14px">删除全部向量内容</button>
         </article>
+
+        <article class="card documents-card">
+          <div class="card-heading">
+            <p class="section-number">05</p>
+            <h2>RAG 调试台</h2>
+          </div>
+          <p class="hint">发送查询并查看完整的证据链调试信息。</p>
+          <form id="debug-query-form">
+            <label for="debug-query">查询问题</label>
+            <input id="debug-query" name="query" type="text" placeholder="输入保险相关问题..." autocomplete="off" />
+            <div class="toolbar" style="margin-top:10px">
+              <button type="submit">发送查询</button>
+              <button id="debug-endpoint-toggle" type="button" class="secondary" data-endpoint="/agent/run">端点: /agent/run</button>
+            </div>
+          </form>
+          <div id="debug-response" class="result-box debug-response" aria-live="polite">等待查询...</div>
+          <div id="debug-evidence" class="debug-evidence" style="display:none">
+            <p class="hint" style="margin:12px 0 6px">证据链详情 (点击展开)</p>
+            <div id="debug-evidence-content"></div>
+          </div>
+        </article>
       </section>
     </main>
 

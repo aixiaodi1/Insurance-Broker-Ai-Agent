@@ -225,3 +225,154 @@ deleteAllButton.addEventListener("click", async () => {
   alert(`已删除 ${deleted}/${collections.length} 个向量库。`);
   await refreshCollections();
 });
+
+/* ── RAG 调试台 ── */
+const debugForm = document.querySelector("#debug-query-form");
+const debugInput = document.querySelector("#debug-query");
+const debugResponse = document.querySelector("#debug-response");
+const debugEvidence = document.querySelector("#debug-evidence");
+const debugEvidenceContent = document.querySelector("#debug-evidence-content");
+const debugEndpointToggle = document.querySelector("#debug-endpoint-toggle");
+
+let debugEndpoint = "/agent/run";
+
+debugEndpointToggle.addEventListener("click", () => {
+  debugEndpoint = debugEndpoint === "/agent/run" ? "/agent/run_v2" : "/agent/run";
+  debugEndpointToggle.textContent = `端点: ${debugEndpoint}`;
+});
+
+function renderEvidenceTag(status) {
+  if (status === "valid") return '<span class="evidence-tag tag-valid">有效</span>';
+  if (status === "warning") return '<span class="evidence-tag tag-warning">警告</span>';
+  return '<span class="evidence-tag tag-danger">异常</span>';
+}
+
+function renderDebugEvidence(data) {
+  if (!data) return "";
+  let html = "";
+
+  if (data.retrievalDebug) {
+    const rd = data.retrievalDebug;
+    html += `<div class="evidence-section">
+      <h4>检索计划</h4>
+      <pre>Intent: ${rd.intent || "-"}
+扩展查询: ${JSON.stringify(rd.expandedQueries || [])}
+最终上下文数: ${rd.finalContextCount || 0}</pre>
+    </div>`;
+
+    if (rd.finalContextSections && rd.finalContextSections.length > 0) {
+      html += `<div class="evidence-section">
+        <h4>最终上下文条款</h4>`;
+      for (const ctx of rd.finalContextSections) {
+        html += `<pre>ID: ${ctx.id || "-"} | ${ctx.sectionTitle || "无标题"} (${ctx.contentType || "未知类型"}) RRF: ${ctx.rrfScore != null ? ctx.rrfScore.toFixed(4) : "-"}</pre>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  if (data.intent) {
+    html += `<div class="evidence-section">
+      <h4>意图分类</h4>
+      <pre>意图: ${data.intent} ${renderEvidenceTag("valid")}
+扩展查询: ${JSON.stringify(data.expandedQueries || [])}</pre>
+    </div>`;
+  }
+
+  if (data.events) {
+    const citationEvent = data.events.find(e => e.nodeId === "verify_citations");
+    if (citationEvent && citationEvent.payload) {
+      const p = citationEvent.payload;
+      html += `<div class="evidence-section">
+        <h4>引用验证</h4>
+        <pre>有效引用: [${(p.validCitationIds || []).join(", ")}] ${p.missingCitations ? renderEvidenceTag("danger") : renderEvidenceTag("valid")}
+无效引用: [${(p.invalidCitationIds || []).join(", ")}] ${p.invalidCitationIds.length > 0 ? renderEvidenceTag("danger") : renderEvidenceTag("valid")}</pre>
+      </div>`;
+
+      if (p.numberDetails && p.numberDetails.length > 0) {
+        html += `<div class="evidence-section">
+          <h4>数字校验</h4>`;
+        for (const nd of p.numberDetails) {
+          const tag = nd.found_in_evidence ? renderEvidenceTag("valid") : renderEvidenceTag("danger");
+          html += `<pre>数字 "${nd.number}": ${nd.found_in_evidence ? "证据中存在" : "证据中不存在"} ${tag}</pre>`;
+        }
+        html += `</div>`;
+      }
+
+      if (p.evidenceWarnings && p.evidenceWarnings.length > 0) {
+        html += `<div class="evidence-section">
+          <h4>证据完整性警告</h4>`;
+        for (const w of p.evidenceWarnings) {
+          html += `<pre>${w} ${renderEvidenceTag("warning")}</pre>`;
+        }
+        html += `</div>`;
+      }
+
+      if (p.contextTypesPresent && p.contextTypesPresent.length > 0) {
+        html += `<div class="evidence-section">
+          <h4>上下文类型</h4>
+          <pre>${p.contextTypesPresent.join(", ")}</pre>
+        </div>`;
+      }
+    }
+
+    const rrfEvent = data.events.find(e => e.nodeId === "fuse_retrieval");
+    if (rrfEvent && rrfEvent.payload && rrfEvent.payload.rrfTopK) {
+      html += `<div class="evidence-section">
+        <h4>RRF 融合排序 (Top ${rrfEvent.payload.rrfTopK.length})</h4>`;
+      for (const item of rrfEvent.payload.rrfTopK) {
+        const debug = item.rrf_debug || {};
+        html += `<pre>ID: ${item.id || "-"} | RRF: ${item.rrf_score != null ? item.rrf_score.toFixed(4) : "-"}
+  向量排名: ${debug.vector_rank != null ? debug.vector_rank : "-"} | BM25排名: ${debug.bm25_rank != null ? debug.bm25_rank : "-"} | 专题BM25排名: ${debug.section_bm25_rank != null ? debug.section_bm25_rank : "-"}</pre>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  html += `<div class="evidence-section">
+    <h4>完整响应 JSON</h4>
+    <pre>${JSON.stringify(data, null, 2)}</pre>
+  </div>`;
+
+  return html;
+}
+
+debugForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = debugInput.value.trim();
+  if (!query) return;
+
+  const submitButton = debugForm.querySelector("button[type='submit']");
+  submitButton.disabled = true;
+  debugResponse.textContent = "正在查询...";
+  debugEvidence.style.display = "none";
+
+  try {
+    const response = await fetch(debugEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: query,
+        collection: document.querySelector("#collection")?.value || "default",
+        agentId: "debug-agent",
+        debug: true,
+      }),
+    });
+    const data = await response.json();
+    debugResponse.textContent = data.finalAnswer || JSON.stringify(data, null, 2);
+
+    if (!response.ok) {
+      debugResponse.textContent = `查询失败: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+
+    const evidenceHtml = renderDebugEvidence(data);
+    if (evidenceHtml) {
+      debugEvidenceContent.innerHTML = evidenceHtml;
+      debugEvidence.style.display = "block";
+    }
+  } catch (error) {
+    debugResponse.textContent = `查询失败: ${error.message}`;
+  } finally {
+    submitButton.disabled = false;
+  }
+});

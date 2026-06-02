@@ -20,16 +20,16 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state: dict = {}
 
-    from app.config import Settings
+    from app.dependencies import get_settings
 
-    settings = Settings()
+    settings = get_settings()
 
     def _is_model_cached(repo_id: str) -> bool:
         cache_key = f"models--{repo_id.replace('/', '--')}"
         cache_path = Path(HUGGINGFACE_HUB_CACHE) / cache_key
-        return cache_path.is_dir() and any(cache_path.rglob("model.safetensors")) or any(cache_path.rglob("pytorch_model.bin"))
+        return cache_path.is_dir() and (any(cache_path.rglob("model.safetensors")) or any(cache_path.rglob("pytorch_model.bin")))
 
-    if _is_model_cached(settings.embedding_model):
+    if settings.preload_embedding_model and _is_model_cached(settings.embedding_model):
         try:
             from sentence_transformers import SentenceTransformer
 
@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         print(f"[lifespan] Embedding model not cached, skipping")
 
-    if _is_model_cached(settings.cross_encoder_model):
+    if settings.preload_embedding_model and _is_model_cached(settings.cross_encoder_model):
         try:
             from sentence_transformers import CrossEncoder
 
@@ -58,11 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         repo = SQLiteRepository(settings.database_url)
         repo.initialize()
-        all_chunks = repo.list_all_child_texts()
-        print(f"[lifespan] Loading {len(all_chunks)} child chunks into BM25...")
         bm25 = MemoryBM25Indexer()
-        if all_chunks:
-            bm25.rebuild(all_chunks)
+        count = bm25.rebuild_from_repository(repo)
+        print(f"[lifespan] Loaded {count} chunks into BM25 from SQLite.")
         state["bm25_indexer"] = bm25
     except Exception as exc:
         print(f"[lifespan] BM25 index loading skipped: {exc}")

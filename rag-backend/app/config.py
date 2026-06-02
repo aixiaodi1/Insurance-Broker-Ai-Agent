@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     rerank_api_path: str = "/v1/rerank"
     rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     cross_encoder_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    preload_embedding_model: bool = True
     rag_rerank_top_k: int = 5
     parent_chunk_size: int = 1500
     llm_api_base_url: str = ""

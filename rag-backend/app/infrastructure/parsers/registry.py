@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app.infrastructure.parsers.base import DocumentParser
 from app.infrastructure.parsers.markdown_parser import MarkdownParser
-from app.infrastructure.parsers.pdf_parser import PdfParser
+from app.infrastructure.parsers.pdf_parser_v2 import PdfParserV2
 from app.infrastructure.parsers.text_parser import TextParser
 
 
@@ -16,7 +16,7 @@ class ParserRegistry:
             {
                 ".txt": TextParser(),
                 ".md": MarkdownParser(),
-                ".pdf": PdfParser(),
+                ".pdf": PdfParserV2(),
             }
         )
 

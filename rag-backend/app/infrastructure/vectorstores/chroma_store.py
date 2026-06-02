@@ -79,14 +79,17 @@ class ChromaVectorStore:
         except Exception as exc:
             raise RetryableIngestionError(f"Chroma write failed: {sanitize_error_message(str(exc))}") from exc
 
-    def query_chunks(self, collection: str, embedding: list[float], n_results: int = 5) -> list[dict]:
+    def query_chunks(self, collection: str, embedding: list[float], n_results: int = 5, where: dict | None = None) -> list[dict]:
         try:
             target = self.client.get_or_create_collection(collection)
-            result = target.query(
+            query_kwargs = dict(
                 query_embeddings=[embedding],
                 n_results=n_results,
                 include=["documents", "metadatas", "distances"],
             )
+            if where:
+                query_kwargs["where"] = where
+            result = target.query(**query_kwargs)
         except Exception as exc:
             raise RetryableIngestionError(f"Chroma query failed: {sanitize_error_message(str(exc))}") from exc
 

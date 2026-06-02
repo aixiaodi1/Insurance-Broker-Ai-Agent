@@ -262,6 +262,69 @@ def test_repository_updates_document_source_path(tmp_path: Path) -> None:
     assert repo.get_document(document.id).source_path == final_path
 
 
+def test_repository_creates_chunks_table_with_new_columns(tmp_path: Path) -> None:
+    repo = SQLiteRepository(f"sqlite:///{tmp_path / 'rag.sqlite'}")
+    repo.initialize()
+
+    connection = sqlite3.connect(tmp_path / "rag.sqlite")
+    connection.row_factory = sqlite3.Row
+    columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(chunks)").fetchall()}
+    connection.close()
+
+    assert "section_no" in columns
+    assert "section_title" in columns
+    assert "content_type" in columns
+    assert "page_start" in columns
+    assert "page_end" in columns
+
+
+def test_repository_stores_and_retrieves_chunk_metadata(tmp_path: Path) -> None:
+    repo = SQLiteRepository(f"sqlite:///{tmp_path / 'rag.sqlite'}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="policy.pdf",
+        collection="insurance",
+        mime_type="application/pdf",
+        file_size=500,
+        source_path=str(tmp_path / "policy.pdf"),
+        content_hash="abc123",
+    )
+
+    repo.replace_chunks(
+        document_id=document.id,
+        collection="insurance",
+        chunks=[
+            {
+                "chunk_index": 0,
+                "chroma_id": f"{document.id}:0",
+                "content_preview": "clause text",
+                "token_count": 10,
+                "source_file": "policy.pdf",
+                "upload_time": "2026-06-01T00:00:00",
+                "section_no": "2.4.1",
+                "section_title": "icd_disease_name",
+                "content_type": "insurance_liability",
+                "page_start": 3,
+                "page_end": 4,
+            }
+        ],
+    )
+
+    connection = sqlite3.connect(tmp_path / "rag.sqlite")
+    connection.row_factory = sqlite3.Row
+    row = connection.execute(
+        "SELECT section_no, section_title, content_type, page_start, page_end FROM chunks WHERE document_id = ?",
+        (document.id,),
+    ).fetchone()
+    connection.close()
+
+    assert row["section_no"] == "2.4.1"
+    assert row["section_title"] == "icd_disease_name"
+    assert row["content_type"] == "insurance_liability"
+    assert row["page_start"] == 3
+    assert row["page_end"] == 4
+
+
 def test_repository_closes_connections_after_operations(tmp_path: Path, monkeypatch) -> None:
     closed_paths: list[Path] = []
     real_connect = sqlite3.connect

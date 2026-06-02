@@ -766,6 +766,9 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "upload_time": document.created_at,
             "source": "upload",
             "content_hash": "hash123",
+            "section_no": "",
+            "section_title": "",
+            "content_type": "",
         },
         {
             "document_id": document.id,
@@ -776,6 +779,9 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "upload_time": document.created_at,
             "source": "upload",
             "content_hash": "hash123",
+            "section_no": "",
+            "section_title": "",
+            "content_type": "",
         },
     ]
     assert repository.chunks == [
@@ -788,6 +794,9 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "token_count": 2,
             "source_file": "guide.md",
             "upload_time": document.created_at,
+            "section_no": "",
+            "section_title": "",
+            "content_type": "",
         },
         {
             "document_id": document.id,
@@ -798,6 +807,9 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "token_count": 2,
             "source_file": "guide.md",
             "upload_time": document.created_at,
+            "section_no": "",
+            "section_title": "",
+            "content_type": "",
         },
     ]
 

@@ -12,6 +12,8 @@ from app.infrastructure.repositories.base import Repository
 from app.infrastructure.vectorstores.base import VectorStore
 from app.observability import get_logger
 from app.retrieval.bm25_indexer import MemoryBM25Indexer, rrf_fusion
+from app.services.intent_classifier import classify_intent, expand_synonyms, intent_summary, content_type_hints, section_hints
+from app.services.retrieval_planner import RetrievalPlanner, filter_by_content_type, dedup_matches
 
 logger = get_logger(__name__)
 
@@ -44,6 +46,7 @@ class RagQueryService:
         self._embedding_dimension = embedding_dimension
         self._cache: dict[str, dict] = {}
         self._cache_max_size = 100
+        self._planner = RetrievalPlanner()
 
     def run(self, prompt: str, collection: str, agent_id: str, thread_id: str | None) -> dict:
         run_id = f"run_{uuid4().hex}"
@@ -83,24 +86,33 @@ class RagQueryService:
             extra={"extra_fields": {"run_id": run_id, "intent_query": intent["query"][:200], "duration_ms": step_elapsed_ms}},
         )
 
-        step_start = perf_counter()
+        timer_embed = perf_counter()
         query_embedding = self._embedder.embed_texts([intent["query"]])[0]
+        embed_ms = int((perf_counter() - timer_embed) * 1000)
         if not query_embedding or len(query_embedding) == 0:
             raise ValueError("嵌入结果为空，请检查 embedding 服务")
         if len(query_embedding) != self._embedding_dimension:
             raise ValueError(f"嵌入维度异常: 期望 {self._embedding_dimension}，实际 {len(query_embedding)}")
-        raw_matches = self._vector_store.query_chunks(collection, query_embedding, n_results=self._retrieval_top_k)
-        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+
+        timer_vq = perf_counter()
+        dense_top_k = min(self._retrieval_top_k * 3, 200) if self._cross_encoder is not None else self._retrieval_top_k
+        raw_matches = self._vector_store.query_chunks(collection, query_embedding, n_results=dense_top_k)
+        vq_ms = int((perf_counter() - timer_vq) * 1000)
+        retrieve_ms = embed_ms + vq_ms
         self._append_step(
             nodes, events, run_id, "retrieve_context", "Retrieve context", started_at,
-            f"Retrieved {len(raw_matches)} chunks from Chroma collection '{collection}'. ({step_elapsed_ms}ms)",
-            {"matchCount": len(raw_matches), "collection": collection, "durationMs": step_elapsed_ms},
+            f"Embedded ({embed_ms}ms) + queried {len(raw_matches)} chunks from Chroma ({vq_ms}ms).",
+            {"matchCount": len(raw_matches), "collection": collection, "durationMs": retrieve_ms,
+             "embedMs": embed_ms, "vectorQueryMs": vq_ms},
             event_type="retrieval",
         )
 
         logger.info(
             "rag_retrieve_completed",
-            extra={"extra_fields": {"run_id": run_id, "match_count": len(raw_matches), "duration_ms": step_elapsed_ms}},
+            extra={"extra_fields": {
+                "run_id": run_id, "match_count": len(raw_matches),
+                "embed_ms": embed_ms, "vector_query_ms": vq_ms, "total_ms": retrieve_ms,
+            }},
         )
 
         if not raw_matches:
@@ -114,6 +126,7 @@ class RagQueryService:
                 collection=collection, started_at=started_at, finished_at=finished_at,
                 latency_ms=latency_ms, nodes=nodes, events=events,
                 vector_matches=[], final_answer=final_answer, tokens=None, generator_raw={},
+                intent_result=intent,
             )
             if len(self._cache) >= self._cache_max_size:
                 self._cache.pop(next(iter(self._cache)))
@@ -122,9 +135,14 @@ class RagQueryService:
 
         vector_matches = [_serialize_vector_match(match, index, collection) for index, match in enumerate(raw_matches)]
 
-        if self._cross_encoder is not None and self._bm25_indexer is not None and self._repository is not None:
-            vector_matches = self._run_dual_pipeline(intent["query"], vector_matches, collection)
-        else:
+        if self._bm25_indexer is not None and self._repository is not None:
+            vector_matches = self._run_dual_pipeline(
+                intent["query"], vector_matches, collection,
+                expanded_queries=intent.get("expanded_queries"),
+                intent_type=intent.get("intent"),
+                nodes=nodes, events=events, run_id=run_id, started_at=started_at,
+            )
+        elif self._reranker is not None:
             vector_matches = self._run_legacy_pipeline(
                 intent["query"],
                 vector_matches,
@@ -146,6 +164,7 @@ class RagQueryService:
                 collection=collection, started_at=started_at, finished_at=finished_at,
                 latency_ms=latency_ms, nodes=nodes, events=events,
                 vector_matches=[], final_answer=final_answer, tokens=None, generator_raw={},
+                intent_result=intent,
             )
             if len(self._cache) >= self._cache_max_size:
                 self._cache.pop(next(iter(self._cache)))
@@ -170,10 +189,19 @@ class RagQueryService:
 
         step_start = perf_counter()
         citation_payload = self._verify_citations(final_answer, len(vector_matches))
+        packed_context_text = packed_context
+        number_check = self._verify_answer_numbers(final_answer, packed_context_text)
+        evidence_check = self._verify_answer_evidence(final_answer, vector_matches)
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        verification_payload = {
+            **citation_payload,
+            **number_check,
+            **evidence_check,
+            "durationMs": step_elapsed_ms,
+        }
         self._append_step(nodes, events, run_id, "verify_citations", "Verify citations", started_at,
                           f"{citation_payload['summary']} ({step_elapsed_ms}ms)",
-                          {**citation_payload, "durationMs": step_elapsed_ms})
+                          verification_payload)
 
         finished_at = datetime.now(UTC).isoformat()
         latency_ms = int((perf_counter() - timer) * 1000)
@@ -187,30 +215,153 @@ class RagQueryService:
             vector_matches=vector_matches, final_answer=final_answer,
             tokens=generation.get("tokens") if isinstance(generation.get("tokens"), dict) else None,
             generator_raw=generation.get("raw") if isinstance(generation.get("raw"), dict) else {},
+            intent_result=intent,
         )
         if len(self._cache) >= self._cache_max_size:
             self._cache.pop(next(iter(self._cache)))
         self._cache[cache_key] = response
         return response
 
-    def _run_dual_pipeline(self, query: str, vector_matches: list[dict], collection: str) -> list[dict]:
-        step_start = perf_counter()
+    def _run_dual_pipeline(
+        self,
+        query: str,
+        vector_matches: list[dict],
+        collection: str,
+        expanded_queries: list[str] | None = None,
+        intent_type: str | None = None,
+        nodes: list | None = None,
+        events: list | None = None,
+        run_id: str | None = None,
+        started_at: str | None = None,
+    ) -> list[dict]:
+        lanes = self._planner.plan(intent_type or "general", query, expanded_queries)
+        lane_debug = self._planner.describe(lanes)
 
-        bm25_texts = self._bm25_indexer.search(query, top_n=self._retrieval_top_k)
+        if nodes is not None and run_id is not None and started_at is not None:
+            self._append_step(nodes, events, run_id, "plan_retrieval", "Plan retrieval", started_at,
+                              f"Planned {len(lanes)} retrieval lanes for intent={intent_type or 'general'}",
+                              {"lanes": lane_debug, "durationMs": 0})
 
-        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        timer_bm25 = perf_counter()
+        bm25_queries = [query]
+        if expanded_queries:
+            for eq in expanded_queries:
+                if eq != query:
+                    bm25_queries.append(eq)
 
-        fused = rrf_fusion(vector_matches, bm25_texts, k=60)
+        section_bm25_queries = [l.query for l in lanes if l.method == "section_bm25" and l.query != query]
+
+        all_bm25_results: list[dict] = []
+        for q in bm25_queries:
+            for r in self._bm25_indexer.search(q, top_n=self._retrieval_top_k, collection=collection):
+                r["_bm25_source"] = "bm25"
+                all_bm25_results.append(r)
+        for q in section_bm25_queries:
+            for r in self._bm25_indexer.search(q, top_n=self._retrieval_top_k, collection=collection):
+                r["_bm25_source"] = "section_bm25"
+                all_bm25_results.append(r)
+
+        seen_ids: set[str] = set()
+        bm25_texts = []
+        for r in all_bm25_results:
+            rid = r.get("id", "")
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            bm25_texts.append(r)
+        bm25_ms = int((perf_counter() - timer_bm25) * 1000)
+
+        dense_content_types = set()
+        for l in lanes:
+            if l.method == "dense" and l.target_content_types:
+                dense_content_types.update(l.target_content_types)
+        if dense_content_types:
+            vector_matches = filter_by_content_type(vector_matches, list(dense_content_types))
+
+        timer_rrf = perf_counter()
+        weights = {l.method: l.weight for l in lanes}
+        dense_weight = weights.get("dense", 1.0)
+        bm25_weight = weights.get("bm25", 1.0)
+        section_weight = weights.get("section_bm25", 1.5)
+
+        weighted_rrf = self._weighted_rrf_fusion(vector_matches, bm25_texts, k=60, dense_weight=dense_weight, bm25_weight=bm25_weight, section_weight=section_weight)
+        rrf_ms = int((perf_counter() - timer_rrf) * 1000)
+
+        fused = weighted_rrf
+        fused = dedup_matches(fused)
+
+        logger.info(
+            "dual_pipeline_bm25_rrf",
+            extra={"extra_fields": {
+                "bm25_count": len(bm25_texts),
+                "fused_count": len(fused),
+                "bm25_ms": bm25_ms,
+                "rrf_ms": rrf_ms,
+                "lanes": lane_debug,
+            }},
+        )
 
         if not fused:
             return []
 
-        pairs = [(query, item["contentPreview"]) for item in fused]
-        scores = self._cross_encoder.predict(pairs)
-        scored = list(zip(fused, scores))
-        scored.sort(key=lambda x: float(x[1]), reverse=True)
-        top_k = scored[:self._rerank_top_k]
+        if nodes is not None and run_id is not None and started_at is not None:
+            rrf_debug_info = [
+                {
+                    "id": item.get("id"),
+                    "rrf_score": item.get("rrf_score"),
+                    "rrf_debug": item.get("rrf_debug"),
+                }
+                for item in fused[:10]
+            ]
+            self._append_step(nodes, events, run_id, "fuse_retrieval", "Fuse multi-path retrieval", started_at,
+                              f"Fused {len(fused)} results from {len(lanes)} lanes (RRF)",
+                              {"fusionCount": len(fused), "rrfTopK": rrf_debug_info, "denseWeight": dense_weight, "bm25Weight": bm25_weight, "sectionWeight": section_weight, "durationMs": rrf_ms})
 
+        ce_ms = 0
+        rerank_ms = 0
+        if self._cross_encoder is not None:
+            timer_ce = perf_counter()
+            pairs = [(query, item["contentPreview"]) for item in fused]
+            scores = self._cross_encoder.predict(pairs)
+            ce_ms = int((perf_counter() - timer_ce) * 1000)
+
+            timer_rerank = perf_counter()
+            scored = list(zip(fused, scores))
+            scored.sort(key=lambda x: float(x[1]), reverse=True)
+            top_k = scored[:self._rerank_top_k]
+            rerank_ms = int((perf_counter() - timer_rerank) * 1000)
+
+            logger.info(
+                "dual_pipeline_crossencoder",
+                extra={"extra_fields": {
+                    "ce_input_count": len(pairs),
+                    "ce_ms": ce_ms,
+                    "rerank_ms": rerank_ms,
+                    "top_k": len(top_k),
+                }},
+            )
+        elif self._reranker is not None:
+            timer_rerank = perf_counter()
+            documents = [item["contentPreview"] for item in fused]
+            reranked = self._reranker.rerank(query, documents, top_k=self._rerank_top_k)
+            scored = [(fused[item["index"]], item["score"]) for item in reranked]
+            top_k = scored[:self._rerank_top_k]
+            rerank_ms = int((perf_counter() - timer_rerank) * 1000)
+
+            logger.info(
+                "dual_pipeline_reranker",
+                extra={"extra_fields": {
+                    "rerank_input_count": len(documents),
+                    "rerank_ms": rerank_ms,
+                    "top_k": len(top_k),
+                }},
+            )
+        else:
+            scored = [(item, 0.0) for item in fused[:self._rerank_top_k]]
+            top_k = scored
+
+        timer_parent = perf_counter()
         seen_parents: set[str] = set()
         final_contexts: list[dict] = []
         for item, score in top_k:
@@ -238,7 +389,76 @@ class RagQueryService:
                 if fallback:
                     final_contexts.append({**fallback, "score": float(score)})
 
+        parent_ms = int((perf_counter() - timer_parent) * 1000)
+        logger.info(
+            "dual_pipeline_parent_expand",
+            extra={"extra_fields": {
+                "final_count": len(final_contexts),
+                "parent_ms": parent_ms,
+                "total_ms": bm25_ms + rrf_ms + ce_ms + rerank_ms + parent_ms,
+            }},
+        )
+
         return final_contexts
+
+    def _weighted_rrf_fusion(
+        self,
+        vector_results: list[dict],
+        bm25_results: list[dict],
+        k: int = 60,
+        dense_weight: float = 1.0,
+        bm25_weight: float = 1.0,
+        section_weight: float = 1.5,
+    ) -> list[dict]:
+        seen: dict[str, dict] = {}
+
+        for rank, item in enumerate(vector_results):
+            cid = item.get("id", "")
+            score = dense_weight / (k + rank + 1)
+            seen[cid] = {
+                **item,
+                "rrf_score": score,
+                "rrf_debug": {
+                    "vector_rank": rank,
+                    "vector_score": score,
+                    "bm25_rank": None,
+                    "bm25_score": None,
+                    "section_bm25_rank": None,
+                    "section_bm25_score": None,
+                },
+            }
+
+        for rank, item in enumerate(bm25_results):
+            bid = item.get("id", "")
+            source = item.get("_bm25_source", "bm25")
+            used_weight = section_weight if source == "section_bm25" else bm25_weight
+            score = used_weight / (k + rank + 1)
+
+            lane = "section_bm25" if source == "section_bm25" else "bm25"
+
+            if bid in seen:
+                seen[bid]["rrf_score"] = seen[bid]["rrf_score"] + score
+                seen[bid]["rrf_debug"][f"{lane}_rank"] = rank
+                seen[bid]["rrf_debug"][f"{lane}_score"] = score
+            else:
+                seen[bid] = {
+                    "id": bid,
+                    "contentPreview": item.get("contentPreview", ""),
+                    "metadata": item.get("metadata", {}),
+                    "collection": item.get("collection", "default"),
+                    "rrf_score": score,
+                    "rrf_debug": {
+                        "vector_rank": None,
+                        "vector_score": None,
+                        "bm25_rank": rank if lane == "bm25" else None,
+                        "bm25_score": score if lane == "bm25" else None,
+                        "section_bm25_rank": rank if lane == "section_bm25" else None,
+                        "section_bm25_score": score if lane == "section_bm25" else None,
+                    },
+                }
+
+        sorted_items = sorted(seen.values(), key=lambda x: x["rrf_score"], reverse=True)
+        return sorted_items
 
     def _run_legacy_pipeline(
         self,
@@ -292,10 +512,21 @@ class RagQueryService:
         return _merge_parent_context(match, fetched_chunks)
 
     def _cache_key(self, prompt: str, collection: str) -> str:
-        return hashlib.md5(f"{prompt}:{collection}".encode()).hexdigest()
+        context = f"{prompt}:{collection}:{self._retrieval_top_k}:{self._rerank_top_k}:{self._llm_provider}:{self._embedding_dimension}"
+        return hashlib.md5(context.encode()).hexdigest()
 
     def _analyze_intent(self, prompt: str) -> dict:
-        return {"query": prompt, "requiresKnowledgeBase": True, "summary": "Use the original question as the retrieval query."}
+        intent = classify_intent(prompt)
+        expanded = expand_synonyms(prompt)
+        return {
+            "query": prompt,
+            "expanded_queries": expanded,
+            "requiresKnowledgeBase": True,
+            "intent": intent.value,
+            "summary": intent_summary(intent),
+            "content_type_hints": content_type_hints(intent),
+            "section_hints": section_hints(intent),
+        }
 
     def _pack_context(self, matches: list[dict]) -> str:
         sections = []
@@ -326,11 +557,19 @@ class RagQueryService:
 
     def _build_generation_prompt(self, query: str, packed_context: str) -> str:
         return (
-            "请基于以下知识库资料回答问题。\n"
+            "你是一个严谨的保险条款分析助手，基于以下知识库资料回答问题。\n\n"
             "要求：\n"
-            "1. 只能使用资料中的信息。\n"
-            "2. 每个关键结论都要带 [1]、[2] 这样的引用。\n"
-            "3. 如果资料不足，请直接说明\"知识库中没有足够依据\"。\n\n"
+            "1. 只能使用知识库资料中的信息，不得根据常识补充保险责任。\n"
+            "2. 每个关键结论必须带 [1]、[2] 这样的引用指向资料编号。\n"
+            "3. 涉及数字、百分比、年龄、次数、等待期时，必须确认该数字存在于资料中。\n"
+            "4. 回答赔不赔时，必须同时考虑保险责任和责任免除条款。\n"
+            "5. 回答疾病算不算时，必须基于疾病定义条款判定。\n"
+            "6. 如果资料不足，直接说明「知识库中没有足够依据」。\n"
+            "7. 按以下结构组织回答：\n"
+            "   - 结论：简明回答\n"
+            "   - 依据：引用具体条款编号和页码\n"
+            "   - 注意事项：免责、年龄、等待期、次数限制\n"
+            "   - 未确认信息：当前资料无法确认的部分\n\n"
             f"问题：{query}\n\n"
             f"知识库资料：\n{packed_context}"
         )
@@ -343,6 +582,39 @@ class RagQueryService:
         summary = "Citations verified." if valid and not invalid else "Answer has missing or invalid citations."
         return {"validCitationIds": valid, "invalidCitationIds": invalid, "missingCitations": missing, "summary": summary}
 
+    def _verify_answer_numbers(self, answer: str, context: str) -> dict:
+        number_details: list[dict] = []
+        matches = re.findall(r"(\d+(?:\.\d+)?)(?:\s*%|百分比|种|次|年|岁|天|元|万|千|百万)", answer)
+        for num_str in matches:
+            exists = num_str in context
+            number_details.append({"number": num_str, "found_in_evidence": exists})
+        return {"numbersChecked": len(number_details), "numberDetails": number_details}
+
+    def _verify_answer_evidence(self, answer: str, context_parts: list[dict]) -> dict:
+        warnings: list[str] = []
+        lower_answer = answer.lower()
+
+        liability_keywords = ["赔", "给付", "保险金", "赔付", "赔偿"]
+        exclusion_keywords = ["免责", "不赔", "不承担", "除外", "不负责"]
+
+        has_liability = any(kw in lower_answer for kw in liability_keywords)
+        has_exclusion = any(kw in lower_answer for kw in exclusion_keywords)
+
+        context_types = set()
+        for part in context_parts:
+            meta = part.get("metadata") or {}
+            ct = meta.get("content_type", "")
+            if ct:
+                context_types.add(ct)
+
+        if has_liability and "insurance_liability" not in context_types and "clause" not in context_types:
+            warnings.append("Answer mentions payout but context lacks insurance_liability clauses")
+
+        if has_exclusion and "exclusion" not in context_types:
+            warnings.append("Answer mentions exclusions but context lacks exclusion clauses")
+
+        return {"evidenceWarnings": warnings, "contextTypesPresent": list(context_types)}
+
     def _append_step(self, nodes, events, run_id, node_id, label, timestamp, detail, payload, event_type="state_update"):
         if nodes is None:
             return
@@ -353,7 +625,8 @@ class RagQueryService:
                         "timestamp": timestamp, "title": label, "detail": detail, "payload": payload})
 
     def _build_response(self, run_id, prompt, agent_id, thread_id, collection, started_at, finished_at,
-                        latency_ms, nodes, events, vector_matches, final_answer, tokens, generator_raw):
+                        latency_ms, nodes, events, vector_matches, final_answer, tokens, generator_raw,
+                        intent_result: dict | None = None):
         request_json = {"prompt": prompt, "agentId": agent_id, "threadId": thread_id,
                          "vectorProvider": "chroma", "collection": collection, "debug": True}
         response = {"id": run_id, "mode": "real", "prompt": prompt, "status": "succeeded",
@@ -365,6 +638,26 @@ class RagQueryService:
                      "finalAnswer": final_answer}
         if tokens is not None:
             response["tokens"] = tokens
+        if intent_result:
+            response["intent"] = intent_result.get("intent", "general")
+            response["expandedQueries"] = intent_result.get("expanded_queries", [])
+            response["responseJson"]["intent"] = intent_result.get("intent", "general")
+            response["responseJson"]["expandedQueries"] = intent_result.get("expanded_queries", [])
+        retrieval_debug = {
+            "intent": intent_result.get("intent", "general") if intent_result else "general",
+            "expandedQueries": intent_result.get("expanded_queries", []) if intent_result else [],
+            "finalContextCount": len(vector_matches),
+            "finalContextSections": [
+                {
+                    "id": m.get("id"),
+                    "sectionTitle": m.get("metadata", {}).get("section_title", "") if isinstance(m.get("metadata"), dict) else "",
+                    "contentType": m.get("metadata", {}).get("content_type", "") if isinstance(m.get("metadata"), dict) else "",
+                    "rrfScore": m.get("rrf_score"),
+                }
+                for m in vector_matches[:5]
+            ],
+        }
+        response["retrievalDebug"] = retrieval_debug
         return response
 
 
