@@ -1,5 +1,5 @@
 from typing import Protocol
-from app.domain import DocumentRecord, JobRecord, JobStage, JobStatus
+from app.domain import CalculationRecord, DocumentRecord, JobRecord, JobStage, JobStatus
 
 class Repository(Protocol):
     def initialize(self) -> None: ...
@@ -21,3 +21,18 @@ class Repository(Protocol):
     def get_parent_chunk(self, parent_id: str) -> str | None: ...
     def list_all_child_texts(self) -> list[str]: ...
     def list_all_chunks_for_bm25(self) -> list[dict]: ...
+    def create_calculation_record(
+        self,
+        run_id: str | None = None,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        collection: str | None = None,
+        active_document_id: str | None = None,
+        intent: str | None = None,
+        formula: str | None = None,
+        input_vars: dict | None = None,
+        missing_vars: list[str] | None = None,
+        result: dict | None = None,
+        rule_refs: list[dict] | None = None,
+        answer: str | None = None,
+    ) -> CalculationRecord: ...

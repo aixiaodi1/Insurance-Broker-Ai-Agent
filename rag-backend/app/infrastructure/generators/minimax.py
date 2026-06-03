@@ -5,6 +5,12 @@ import httpx
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
 
 
+_DEFAULT_SYSTEM_PROMPT = (
+    "你是严谨的中文 RAG 问答助手。只能依据用户提供的知识库上下文回答。"
+    "关键结论必须使用 [1]、[2] 这样的引用。资料不足时明确说明知识库中没有足够依据。"
+)
+
+
 class MiniMaxGenerator:
     def __init__(self, base_url: str, path: str, api_key: str, model: str) -> None:
         self._base_url = base_url.rstrip("/")
@@ -12,21 +18,17 @@ class MiniMaxGenerator:
         self._api_key = api_key
         self._model = model
 
-    def generate(self, prompt: str) -> dict:
+    def generate(self, prompt: str, system_prompt: str | None = None) -> dict:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        selected_system = system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+
         payload = {
             "model": self._model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是严谨的中文 RAG 问答助手。只能依据用户提供的知识库上下文回答。"
-                        "关键结论必须使用 [1]、[2] 这样的引用。资料不足时明确说明知识库中没有足够依据。"
-                    ),
-                },
+                {"role": "system", "content": selected_system},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,

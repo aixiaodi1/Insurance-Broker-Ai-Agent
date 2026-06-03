@@ -61,6 +61,13 @@ export interface AgentTokenUsage {
   total: number;
 }
 
+export interface CitationInfo {
+  title: string;
+  sectionTitle: string;
+  sourceFile: string;
+  contentType: string;
+}
+
 export interface AgentRun {
   id: string;
   mode: AgentApiMode;
@@ -77,6 +84,7 @@ export interface AgentRun {
   requestJson: Record<string, unknown>;
   responseJson: Record<string, unknown>;
   finalAnswer: string;
+  citations?: Record<string, CitationInfo>;
 }
 
 export interface CreateAgentRunInput {

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-from app.domain import DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus
+from app.domain import CalculationRecord, DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus
 
 
 class SQLiteRepository:
@@ -17,6 +17,23 @@ class SQLiteRepository:
         with self._connection() as connection:
             connection.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS calculation_records (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    thread_id TEXT,
+                    user_id TEXT,
+                    collection TEXT,
+                    active_document_id TEXT,
+                    intent TEXT,
+                    formula TEXT,
+                    input_vars_json TEXT,
+                    missing_vars_json TEXT,
+                    result_json TEXT,
+                    rule_refs_json TEXT,
+                    answer TEXT,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
                     filename TEXT NOT NULL,
@@ -413,6 +430,74 @@ class SQLiteRepository:
 
     def add_chunks(self, document_id: str, collection: str, chunks: list[dict]) -> None:
         self.replace_chunks(document_id, collection, chunks)
+
+    def create_calculation_record(
+        self,
+        run_id: str | None = None,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        collection: str | None = None,
+        active_document_id: str | None = None,
+        intent: str | None = None,
+        formula: str | None = None,
+        input_vars: dict | None = None,
+        missing_vars: list[str] | None = None,
+        result: dict | None = None,
+        rule_refs: list[dict] | None = None,
+        answer: str | None = None,
+    ) -> CalculationRecord:
+        record_id = f"calc_{uuid4().hex}"
+        created_at = self._now()
+        import json
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO calculation_records (
+                    id, run_id, thread_id, user_id, collection,
+                    active_document_id, intent, formula,
+                    input_vars_json, missing_vars_json, result_json,
+                    rule_refs_json, answer, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    run_id,
+                    thread_id,
+                    user_id,
+                    collection,
+                    active_document_id,
+                    intent,
+                    formula,
+                    json.dumps(input_vars, ensure_ascii=False) if input_vars else None,
+                    json.dumps(missing_vars, ensure_ascii=False) if missing_vars else None,
+                    json.dumps(result, ensure_ascii=False) if result else None,
+                    json.dumps(rule_refs, ensure_ascii=False) if rule_refs else None,
+                    answer,
+                    created_at,
+                ),
+            )
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM calculation_records WHERE id = ?", (record_id,)).fetchone()
+        return self._calculation_record_from_row(row)
+
+    def _calculation_record_from_row(self, row: sqlite3.Row) -> CalculationRecord:
+        return CalculationRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            thread_id=row["thread_id"],
+            user_id=row["user_id"],
+            collection=row["collection"],
+            active_document_id=row["active_document_id"],
+            intent=row["intent"],
+            formula=row["formula"],
+            input_vars_json=row["input_vars_json"],
+            missing_vars_json=row["missing_vars_json"],
+            result_json=row["result_json"],
+            rule_refs_json=row["rule_refs_json"],
+            answer=row["answer"],
+            created_at=row["created_at"],
+        )
 
     def _connect(self) -> sqlite3.Connection:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)

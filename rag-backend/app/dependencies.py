@@ -29,6 +29,7 @@ from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
 from app.services.job_service import JobService
 from app.services.rag_query_service import RagQueryService
+from app.services.thread_state_store import ThreadStateStore
 
 app_state: dict = {}
 
@@ -172,10 +173,17 @@ def get_ingestion_service() -> IngestionService:
     )
 
 
+@lru_cache
+def get_thread_state_store() -> ThreadStateStore:
+    settings = get_settings()
+    return ThreadStateStore(settings.redis_url)
+
+
 def get_rag_query_service() -> RagQueryService:
     settings = get_settings()
     cross_encoder = get_cross_encoder()
     bm25_indexer = get_bm25_indexer()
+    state_store = get_thread_state_store()
     if bm25_indexer is not None:
         return RagQueryService(
             embedder=get_embedder(),
@@ -189,6 +197,8 @@ def get_rag_query_service() -> RagQueryService:
             retrieval_top_k=min(settings.rag_retrieval_top_k, 10) if cross_encoder else settings.rag_retrieval_top_k,
             rerank_top_k=3 if cross_encoder else settings.rag_rerank_top_k,
             embedding_dimension=settings.embedding_dimension,
+            state_store=state_store,
+            redis_url=settings.redis_url,
         )
     return RagQueryService(
         embedder=get_embedder(),
@@ -199,6 +209,8 @@ def get_rag_query_service() -> RagQueryService:
         retrieval_top_k=settings.rag_retrieval_top_k,
         rerank_top_k=settings.rag_rerank_top_k,
         embedding_dimension=settings.embedding_dimension,
+        state_store=state_store,
+        redis_url=settings.redis_url,
     )
 
 

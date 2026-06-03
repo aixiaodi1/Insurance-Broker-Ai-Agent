@@ -49,6 +49,7 @@ class ParserType(StrEnum):
 
 
 class QueryIntent(StrEnum):
+    CLAIM_CALCULATION = "claim_calculation"
     BENEFIT_QUERY = "benefit_query"
     DISEASE_DEFINITION = "disease_definition"
     EXCLUSION_QUERY = "exclusion_query"
@@ -114,6 +115,24 @@ class ParsedLine:
     block_num: int
     line_num: int
     bbox: tuple[float, float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class CalculationRecord:
+    id: str
+    run_id: str | None
+    thread_id: str | None
+    user_id: str | None
+    collection: str | None
+    active_document_id: str | None
+    intent: str | None
+    formula: str | None
+    input_vars_json: str | None
+    missing_vars_json: str | None
+    result_json: str | None
+    rule_refs_json: str | None
+    answer: str | None
+    created_at: str
 
 
 @dataclass(frozen=True)

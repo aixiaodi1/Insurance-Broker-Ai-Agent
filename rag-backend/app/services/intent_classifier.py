@@ -14,6 +14,7 @@ _SYNONYM_MAP: dict[str, list[str]] = {
 }
 
 _INTENT_RULES: list[tuple[re.Pattern, QueryIntent]] = [
+    (re.compile(r"花了.*万|花了.*元|花费.*元|费用.*赔|医疗费.*计算|能赔多少|算算|帮我算"), QueryIntent.CLAIM_CALCULATION),
     (re.compile(r"等待期|观察期|多少天.*等待|等待.*多久"), QueryIntent.WAITING_PERIOD),
     (re.compile(r"赔不赔|能赔吗|是否赔付|给付吗"), QueryIntent.BENEFIT_QUERY),
     (re.compile(r"赔多少|赔付比例|给付比例|保额|保险金额|赔几次|给付几次|每次.*赔|赔付.*多少"), QueryIntent.BENEFIT_QUERY),
@@ -28,6 +29,7 @@ _INTENT_RULES: list[tuple[re.Pattern, QueryIntent]] = [
 ]
 
 _INTENT_CONTENT_TYPE_MAP: dict[QueryIntent, list[str]] = {
+    QueryIntent.CLAIM_CALCULATION: ["insurance_liability", "clause"],
     QueryIntent.BENEFIT_QUERY: ["insurance_liability", "clause"],
     QueryIntent.DISEASE_DEFINITION: ["disease_definition", "definition", "table_candidate"],
     QueryIntent.EXCLUSION_QUERY: ["exclusion", "insurance_liability", "disease_definition"],
@@ -40,6 +42,7 @@ _INTENT_CONTENT_TYPE_MAP: dict[QueryIntent, list[str]] = {
 }
 
 _INTENT_SECTION_HINTS: dict[QueryIntent, list[str]] = {
+    QueryIntent.CLAIM_CALCULATION: ["2.4", "2.5", "2.6", "10", "11", "13"],
     QueryIntent.WAITING_PERIOD: ["2.3", "7"],
     QueryIntent.EXCLUSION_QUERY: ["2.6"],
     QueryIntent.DISEASE_DEFINITION: ["10", "11", "13"],
@@ -68,6 +71,7 @@ def expand_synonyms(text: str) -> list[str]:
 
 def intent_summary(intent: QueryIntent) -> str:
     summaries = {
+        QueryIntent.CLAIM_CALCULATION: "User is asking for a claim calculation with specific numbers.",
         QueryIntent.BENEFIT_QUERY: "User is asking about benefit amounts, payout ratios, or coverage scope.",
         QueryIntent.DISEASE_DEFINITION: "User is asking about disease classification or definition.",
         QueryIntent.EXCLUSION_QUERY: "User is asking about exclusions or non-covered scenarios.",

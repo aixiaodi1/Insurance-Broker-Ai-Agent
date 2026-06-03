@@ -14,8 +14,24 @@ from app.observability import get_logger
 from app.retrieval.bm25_indexer import MemoryBM25Indexer, rrf_fusion
 from app.services.intent_classifier import classify_intent, expand_synonyms, intent_summary, content_type_hints, section_hints
 from app.services.retrieval_planner import RetrievalPlanner, filter_by_content_type, dedup_matches
+from app.services.thread_state_store import ThreadStateStore
+from app.services.rule_extractor import extract_rules, get_all_required_vars
+from app.services.var_extractor import extract_user_vars
+from app.services.calculator import calc_reimbursement
 
 logger = get_logger(__name__)
+
+_CALCULATION_SYSTEM_PROMPT = (
+    "你是严谨的保险理赔计算助手。以下是根据知识库识别到的计算规则和用户已提供/缺失的信息。\n"
+    "请按以下规则处理：\n"
+    "1. 如果缺少变量，礼貌地列出还缺哪些信息，并引导用户补充。不要说'没有依据'。\n"
+    "2. 不允许根据常识补全保险条款中没有给出的数字（免赔额、赔付比例、限额等）。\n"
+    "3. 不允许由 LLM 自行心算赔付金额。\n"
+    "4. 如果变量齐全，直接使用后端提供的计算结果，不要重新计算。\n"
+    "5. 回答理赔金额时，必须说明计算前提、公式、输入变量、结果和条款引用。\n"
+    "6. 如果条款依据不足，必须明确说'不足以判断'并说明缺少哪类条款依据。\n"
+    "7. 关键结论必须使用 [1]、[2] 这样的引用指向资料编号。\n"
+)
 
 
 class RagQueryService:
@@ -32,6 +48,8 @@ class RagQueryService:
         retrieval_top_k: int = 20,
         rerank_top_k: int = 5,
         embedding_dimension: int = 768,
+        state_store: ThreadStateStore | None = None,
+        redis_url: str = "",
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -47,8 +65,18 @@ class RagQueryService:
         self._cache: dict[str, dict] = {}
         self._cache_max_size = 100
         self._planner = RetrievalPlanner()
+        self._state_store = state_store
+        self._redis_url = redis_url
 
-    def run(self, prompt: str, collection: str, agent_id: str, thread_id: str | None) -> dict:
+    def run(
+        self,
+        prompt: str,
+        collection: str,
+        agent_id: str,
+        thread_id: str | None,
+        user_id: str = "default",
+        collected_vars: dict | None = None,
+    ) -> dict:
         run_id = f"run_{uuid4().hex}"
         started_at = datetime.now(UTC).isoformat()
         timer = perf_counter()
@@ -79,6 +107,18 @@ class RagQueryService:
         step_start = perf_counter()
         intent = self._analyze_intent(query)
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+
+        if intent.get("intent") != "claim_calculation" and thread_id:
+            try:
+                pending_state = self._state_store.get_state(user_id, thread_id, collection) if self._state_store else None
+                if pending_state and pending_state.get("pending_intent") == "claim_calculation":
+                    intent = {
+                        **intent,
+                        "intent": "claim_calculation",
+                        "summary": "Continuing previous claim calculation from thread state.",
+                    }
+            except Exception:
+                pass
         self._append_step(nodes, events, run_id, "analyze_intent", "Analyze intent", started_at, intent["summary"], {**intent, "durationMs": step_elapsed_ms})
 
         logger.info(
@@ -171,6 +211,17 @@ class RagQueryService:
             self._cache[cache_key] = response
             return response
 
+        # --- CLAIM_CALCULATION special flow ---
+        if intent.get("intent") == "claim_calculation":
+            return self._run_claim_calculation(
+                prompt=prompt, collection=collection, agent_id=agent_id,
+                thread_id=thread_id, user_id=user_id,
+                collected_vars=collected_vars or {},
+                vector_matches=vector_matches, intent=intent,
+                run_id=run_id, started_at=started_at, timer=timer,
+                events=events, nodes=nodes, cache_key=cache_key,
+            )
+
         step_start = perf_counter()
         packed_context = self._pack_context(vector_matches)
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
@@ -188,7 +239,7 @@ class RagQueryService:
                           {"finalAnswer": final_answer, "durationMs": step_elapsed_ms})
 
         step_start = perf_counter()
-        citation_payload = self._verify_citations(final_answer, len(vector_matches))
+        citation_payload = self._verify_citations(final_answer, len(vector_matches), vector_matches)
         packed_context_text = packed_context
         number_check = self._verify_answer_numbers(final_answer, packed_context_text)
         evidence_check = self._verify_answer_evidence(final_answer, vector_matches)
@@ -515,6 +566,334 @@ class RagQueryService:
         context = f"{prompt}:{collection}:{self._retrieval_top_k}:{self._rerank_top_k}:{self._llm_provider}:{self._embedding_dimension}"
         return hashlib.md5(context.encode()).hexdigest()
 
+    def _run_claim_calculation(
+        self,
+        prompt: str,
+        collection: str,
+        agent_id: str,
+        thread_id: str | None,
+        user_id: str,
+        collected_vars: dict,
+        vector_matches: list[dict],
+        intent: dict,
+        run_id: str,
+        started_at: str,
+        timer: float,
+        events: list[dict],
+        nodes: list[dict],
+        cache_key: str,
+    ) -> dict:
+        calc_debug: dict[str, object] = {}
+
+        step_start = perf_counter()
+        packed_context = self._pack_context(vector_matches)
+        self._append_step(nodes, events, run_id, "pack_context", "Pack context", started_at,
+                          f"Packed {len(vector_matches)} cited chunks.",
+                          {"context": packed_context, "durationMs": int((perf_counter() - step_start) * 1000)})
+        calc_debug["pack_context_ms"] = int((perf_counter() - step_start) * 1000)
+
+        step_start = perf_counter()
+        rules = extract_rules(packed_context, self._generator)
+        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        self._append_step(nodes, events, run_id, "extract_rules", "Extract rules", started_at,
+                          f"Extracted {len(rules)} rule(s). ({step_elapsed_ms}ms)",
+                          {"ruleCount": len(rules), "rules": rules, "durationMs": step_elapsed_ms})
+        calc_debug["rules"] = rules
+        calc_debug["extract_rules_ms"] = step_elapsed_ms
+
+        step_start = perf_counter()
+        new_vars = extract_user_vars(prompt, self._generator)
+        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        self._append_step(nodes, events, run_id, "extract_user_vars", "Extract user vars", started_at,
+                          f"Extracted {len(new_vars)} variable(s). ({step_elapsed_ms}ms)",
+                          {"newVars": new_vars, "durationMs": step_elapsed_ms})
+        calc_debug["new_vars"] = new_vars
+        calc_debug["extract_vars_ms"] = step_elapsed_ms
+
+        step_start = perf_counter()
+        merged_state = self._merge_calculation_state(
+            thread_id=thread_id,
+            user_id=user_id,
+            collection=collection,
+            new_vars=new_vars,
+            collected_vars=collected_vars,
+            rules=rules,
+            intent=intent,
+        )
+        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        self._append_step(nodes, events, run_id, "merge_state", "Merge thread state", started_at,
+                          f"Merged {len(merged_state.get('collected_vars', {}))} var(s). ({step_elapsed_ms}ms)",
+                          {"mergedState": merged_state, "durationMs": step_elapsed_ms})
+        calc_debug["merged_state"] = merged_state
+        calc_debug["merge_state_ms"] = step_elapsed_ms
+
+        missing_vars = merged_state.get("missing_vars", [])
+        collected = merged_state.get("collected_vars", {})
+        rules_list = merged_state.get("rules", rules)
+        state_id = merged_state.get("state_id")
+        rule_refs = merged_state.get("rule_refs", [])
+        active_document_id = merged_state.get("active_document_id")
+        active_product_name = merged_state.get("active_product_name")
+
+        has_rule = merged_state.get("has_rule", False)
+        pending_calculation = bool(missing_vars) or not has_rule
+        calc_result: dict | None = None
+
+        if not pending_calculation:
+            step_start = perf_counter()
+            calc_result = calc_reimbursement(
+                expense=collected.get("eligible_expense") or collected.get("medical_expense", 0),
+                deductible=collected.get("deductible", 0),
+                ratio=collected.get("reimbursement_ratio", 0),
+                limit=collected.get("single_limit") or collected.get("annual_limit"),
+            )
+            step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+            self._append_step(nodes, events, run_id, "compute_calculation", "Compute calculation", started_at,
+                              f"Calculated: {calc_result['explanation']} ({step_elapsed_ms}ms)",
+                              {**calc_result, "durationMs": step_elapsed_ms})
+            calc_debug["calc_result"] = calc_result
+
+        answer_for_sqlite = ""
+
+        step_start = perf_counter()
+        if pending_calculation:
+            calc_prompt = self._build_calculation_missing_vars_prompt(
+                query=prompt,
+                collected_vars=collected,
+                missing_vars=missing_vars,
+                rules=rules_list,
+                packed_context=packed_context,
+            )
+            generation = self._generator.generate(
+                calc_prompt,
+                system_prompt=_CALCULATION_SYSTEM_PROMPT,
+            )
+            final_answer = str(generation["answer"])
+            answer_for_sqlite = final_answer
+        else:
+            calc_prompt = self._build_calculation_complete_prompt(
+                query=prompt,
+                collected_vars=collected,
+                calc_result=calc_result,
+                rules=rules_list,
+                packed_context=packed_context,
+            )
+            generation = self._generator.generate(
+                calc_prompt,
+                system_prompt=_CALCULATION_SYSTEM_PROMPT,
+            )
+            final_answer = str(generation["answer"])
+            answer_for_sqlite = final_answer
+        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        self._append_step(nodes, events, run_id, "generate_calculation_answer", "Generate answer", started_at,
+                          f"Generated answer with {self._llm_provider}. ({step_elapsed_ms}ms)",
+                          {"finalAnswer": final_answer, "durationMs": step_elapsed_ms})
+        calc_debug["generate_ms"] = step_elapsed_ms
+
+        step_start = perf_counter()
+        citation_payload = self._verify_citations(final_answer, len(vector_matches), vector_matches)
+        step_elapsed_ms = int((perf_counter() - step_start) * 1000)
+        verification_payload = {**citation_payload, "durationMs": step_elapsed_ms}
+        self._append_step(nodes, events, run_id, "verify_citations", "Verify citations", started_at,
+                          f"{citation_payload['summary']} ({step_elapsed_ms}ms)",
+                          verification_payload)
+        calc_debug["verify_ms"] = step_elapsed_ms
+
+        if self._repository is not None:
+            try:
+                self._repository.create_calculation_record(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    collection=collection,
+                    active_document_id=active_document_id,
+                    intent="claim_calculation",
+                    formula=(calc_result or {}).get("formula_expr") or (rules_list[0] if rules_list else {}).get("formula_expr"),
+                    input_vars=collected,
+                    missing_vars=missing_vars or None,
+                    result=calc_result,
+                    rule_refs=rule_refs,
+                    answer=answer_for_sqlite,
+                )
+            except Exception as exc:
+                logger.warning("save_calculation_record_failed", extra={"extra_fields": {"error": str(exc)}})
+
+        if self._state_store is not None and thread_id:
+            try:
+                self._state_store.save_state(user_id, thread_id, collection, merged_state)
+            except Exception as exc:
+                logger.warning("save_thread_state_failed", extra={"extra_fields": {"error": str(exc)}})
+
+        finished_at = datetime.now(UTC).isoformat()
+        latency_ms = int((perf_counter() - timer) * 1000)
+        self._append_step(nodes, events, run_id, "final_answer", "Final answer", finished_at, final_answer,
+                          {"finalAnswer": final_answer, "durationMs": 0, "totalMs": latency_ms}, event_type="final_answer")
+
+        response = self._build_response(
+            run_id=run_id, prompt=prompt, agent_id=agent_id, thread_id=thread_id,
+            collection=collection, started_at=started_at, finished_at=finished_at,
+            latency_ms=latency_ms, nodes=nodes, events=events,
+            vector_matches=vector_matches, final_answer=final_answer,
+            tokens=generation.get("tokens") if isinstance(generation.get("tokens"), dict) else None,
+            generator_raw=generation.get("raw") if isinstance(generation.get("raw"), dict) else {},
+            intent_result=intent,
+            calculation_extra={
+                "intent": "claim_calculation",
+                "activeDocumentId": active_document_id,
+                "activeProductName": active_product_name,
+                "collectedVars": collected,
+                "missingVars": missing_vars,
+                "pendingCalculation": pending_calculation,
+                "calculation": calc_result,
+                "stateId": state_id,
+            },
+        )
+        if len(self._cache) >= self._cache_max_size:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[cache_key] = response
+        return response
+
+    def _merge_calculation_state(
+        self,
+        thread_id: str | None,
+        user_id: str,
+        collection: str,
+        new_vars: dict,
+        collected_vars: dict,
+        rules: list[dict],
+        intent: dict,
+    ) -> dict:
+        old_state: dict | None = None
+        if self._state_store is not None and thread_id:
+            try:
+                old_state = self._state_store.get_state(user_id, thread_id, collection)
+            except Exception as exc:
+                logger.warning("load_thread_state_failed", extra={"extra_fields": {"error": str(exc)}})
+
+        old_vars: dict = {}
+        old_missing: list = []
+        if old_state is not None:
+            old_vars = old_state.get("collected_vars", {})
+            old_missing = old_state.get("missing_vars", [])
+
+        merged: dict[str, object] = {}
+        merged.update(old_vars)
+        merged.update(collected_vars)
+        merged.update(new_vars)
+
+        required = get_all_required_vars(rules)
+        missing = [v for v in required if v not in merged]
+
+        state_id = None
+        if thread_id:
+            import hashlib
+            state_id = hashlib.md5(f"{user_id}:{thread_id}:{collection}".encode()).hexdigest()[:12]
+
+        document_id = None
+        product_name = None
+        if old_state:
+            document_id = old_state.get("active_document_id")
+            product_name = old_state.get("active_product_name")
+        elif intent.get("intent") == "claim_calculation":
+            document_id = f"doc_{collection}"
+
+        rule_refs = []
+        has_valid_rule = False
+        for rule in rules:
+            for ev in rule.get("evidence", []):
+                if isinstance(ev, dict) and ev.get("chunk_id"):
+                    rule_refs.append(ev)
+            if rule.get("required_vars") and rule.get("rule_type") != "unknown":
+                has_valid_rule = True
+
+        return {
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "collection": collection,
+            "active_document_id": document_id,
+            "active_product_name": product_name,
+            "pending_intent": "claim_calculation",
+            "collected_vars": merged,
+            "missing_vars": missing,
+            "rule_refs": rule_refs,
+            "rules": rules,
+            "has_rule": has_valid_rule,
+            "pending_calculation": bool(missing) or not has_valid_rule,
+            "state_id": state_id,
+        }
+
+    def _build_calculation_missing_vars_prompt(
+        self,
+        query: str,
+        collected_vars: dict,
+        missing_vars: list[str],
+        rules: list[dict],
+        packed_context: str,
+    ) -> str:
+        var_names = {
+            "medical_expense": "医疗费用",
+            "eligible_expense": "可赔费用",
+            "deductible": "免赔额",
+            "reimbursement_ratio": "赔付比例",
+            "social_insurance_used": "是否经社保结算",
+            "annual_limit": "年度限额",
+            "single_limit": "单次限额",
+            "hospital_level": "医院等级",
+            "disease_name": "疾病名称",
+            "claim_type": "理赔类型",
+        }
+        has_valid_rule = any(
+            r.get("required_vars") and r.get("rule_type") != "unknown"
+            for r in rules
+        )
+        if not has_valid_rule:
+            return (
+                f"用户提问：{query}\n\n"
+                f"知识库资料：\n{packed_context}\n\n"
+                "当前知识库中没有找到明确的计算规则。请告知用户资料不足，无法识别完整的计算公式，"
+                "需要提供更详细的条款信息才能计算。不要编造规则。"
+            )
+        known_lines = "\n".join(
+            f"- {var_names.get(k, k)}：{v}" for k, v in collected_vars.items()
+        )
+        missing_lines = "\n".join(
+            f"- {var_names.get(v, v)}" for v in missing_vars
+        )
+        formula = rules[0].get("formula", "") if rules else ""
+        return (
+            f"用户提问：{query}\n\n"
+            f"知识库资料：\n{packed_context}\n\n"
+            f"识别到的计算公式：{formula}\n\n"
+            f"用户已提供的信息：\n{known_lines if known_lines else '(暂无)'}\n\n"
+            f"还缺少以下信息：\n{missing_lines if missing_lines else '(暂无)'}\n\n"
+            "请根据以上信息，礼貌地告诉用户还缺少哪些变量，并引导用户补充。"
+            "不要编造数字。不要自行计算。"
+        )
+
+    def _build_calculation_complete_prompt(
+        self,
+        query: str,
+        collected_vars: dict,
+        calc_result: dict | None,
+        rules: list[dict],
+        packed_context: str,
+    ) -> str:
+        calculation_text = ""
+        if calc_result:
+            calculation_text = (
+                f"后端计算结果：\n"
+                f"- 公式：{calc_result.get('explanation', '')}\n"
+                f"- 计算结果：{calc_result.get('result', '')} 元\n\n"
+            )
+        return (
+            f"用户提问：{query}\n\n"
+            f"知识库资料：\n{packed_context}\n\n"
+            f"{calculation_text}"
+            "请向用户解释计算过程和结果，引用相关条款。"
+            "必须在回答中说明计算前提——以用户提供信息准确且费用属于条款认可范围为前提。"
+            "保留必要提示：最终仍需看费用是否属于可赔范围、是否触发年度限额、是否经过社保结算等。"
+        )
+
     def _analyze_intent(self, prompt: str) -> dict:
         intent = classify_intent(prompt)
         expanded = expand_synonyms(prompt)
@@ -561,26 +940,104 @@ class RagQueryService:
             "要求：\n"
             "1. 只能使用知识库资料中的信息，不得根据常识补充保险责任。\n"
             "2. 每个关键结论必须带 [1]、[2] 这样的引用指向资料编号。\n"
+            "   引用编号 [N] 对应的章节标题已标注在上下文开头（如「第九条 免赔额」），\n"
+            "   你必须使用 [N] 对应的准确条款号，不得混用。\n"
+            "   例如：若 [1] 标注为「第九条 免赔额」，则正文中只能写 [1]（第九条），不能写成 [1]（第十一条）。\n"
             "3. 涉及数字、百分比、年龄、次数、等待期时，必须确认该数字存在于资料中。\n"
             "4. 回答赔不赔时，必须同时考虑保险责任和责任免除条款。\n"
+            "   当问题涉及意外受伤原因（如崴脚、摔倒、扭伤、撞伤、骨折等），\n"
+            "   你必须检索知识库中是否包含责任免除条款，判断是否属于高风险运动（滑雪、攀岩、赛车等）导致的伤害。\n"
             "5. 回答疾病算不算时，必须基于疾病定义条款判定。\n"
             "6. 如果资料不足，直接说明「知识库中没有足够依据」。\n"
-            "7. 按以下结构组织回答：\n"
-            "   - 结论：简明回答\n"
-            "   - 依据：引用具体条款编号和页码\n"
-            "   - 注意事项：免责、年龄、等待期、次数限制\n"
-            "   - 未确认信息：当前资料无法确认的部分\n\n"
+            "7. 必须严格按照以下结构组织回答，段落之间空一行：\n"
+            "\n"
+            "**结论：**\n"
+            "（简明回答能否赔付，一句话说清）\n"
+            "\n"
+            "**依据：**\n"
+            "（逐条列出，每条另起一行，引用具体条款编号）\n"
+            "\n"
+            "**注意事项：**\n"
+            "（免责、等待期、医院范围、费用合理性等限制条件）\n"
+            "\n"
+            "**需要用户确认的信息：**\n"
+            "（列出知识库缺失、需要用户查看保单才能确定的变量，见第8条）\n"
+            "\n"
+            "8. 如果回答依赖于保单上载明的个性化信息（如年度免赔额、赔付比例、投保日期、\n"
+            "    交费年限、承保期限等），而知识库中没有这些具体数字，你必须按以下优先级\n"
+            "    引导用户：\n"
+            "\n"
+            "    方案一（推荐，成本最低）：\n"
+            "    建议用户直接上传电子保单的关键页面截图或PDF——包含现金价值页、\n"
+            "    免赔额页、交费年限页、承保期限页。系统可以直接从这些页面提取\n"
+            "    所需信息，用户无需自行查找。\n"
+            "\n"
+            "    方案二（备选）：\n"
+            "    如果用户不方便上传，也可以手动提供关键信息，例如\n"
+            "    「我的免赔额是XX元，投保日期是XXXX年XX月」。\n"
+            "\n"
+            "    用自然语言向用户解释为什么方案一更优（上传后系统自动识别、\n"
+            "    一劳永逸），同时给出方案二作为兜底。\n\n"
             f"问题：{query}\n\n"
             f"知识库资料：\n{packed_context}"
         )
 
-    def _verify_citations(self, answer: str, context_count: int) -> dict:
+    def _check_citation_article_mismatch(self, answer: str, vector_matches: list[dict]) -> list[dict]:
+        mismatches: list[dict] = []
+        section_titles: dict[int, str] = {}
+        for idx, m in enumerate(vector_matches, start=1):
+            meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
+            title = meta.get("section_title") or meta.get("clause_title") or ""
+            section_titles[idx] = title
+
+        for ref_num, title in section_titles.items():
+            expected_no = _extract_article_number(title)
+            if expected_no is None:
+                continue
+            answer_lines = answer.split("\n")
+            for line in answer_lines:
+                if f"[{ref_num}]" not in line:
+                    continue
+                mentioned = re.findall(r"第[一二三四五六七八九十\d]+条", line)
+                if not mentioned:
+                    continue
+                actual_numbers = set()
+                for m in mentioned:
+                    n = _chinese_to_arabic(m)
+                    if n is not None:
+                        actual_numbers.add(n)
+                if actual_numbers and expected_no not in actual_numbers:
+                    mismatches.append({
+                        "citationId": ref_num,
+                        "expectedArticle": expected_no,
+                        "actualArticles": sorted(actual_numbers),
+                        "sectionTitle": title,
+                        "line": line.strip(),
+                    })
+        return mismatches
+
+    def _verify_citations(self, answer: str, context_count: int, vector_matches: list[dict] | None = None) -> dict:
         cited = sorted({int(value) for value in re.findall(r"\[(\d+)\]", answer)})
         valid = [value for value in cited if 1 <= value <= context_count]
         invalid = [value for value in cited if value not in valid]
         missing = not valid
-        summary = "Citations verified." if valid and not invalid else "Answer has missing or invalid citations."
-        return {"validCitationIds": valid, "invalidCitationIds": invalid, "missingCitations": missing, "summary": summary}
+        article_mismatches = []
+        if vector_matches:
+            article_mismatches = self._check_citation_article_mismatch(answer, vector_matches)
+        summary_parts = []
+        if valid and not invalid:
+            summary_parts.append("Citations verified.")
+        else:
+            summary_parts.append("Answer has missing or invalid citations.")
+        if article_mismatches:
+            summary_parts.append(f"Article number mismatches found: {len(article_mismatches)}.")
+        return {
+            "validCitationIds": valid,
+            "invalidCitationIds": invalid,
+            "missingCitations": missing,
+            "articleMismatches": article_mismatches,
+            "summary": " ".join(summary_parts),
+        }
 
     def _verify_answer_numbers(self, answer: str, context: str) -> dict:
         number_details: list[dict] = []
@@ -626,7 +1083,8 @@ class RagQueryService:
 
     def _build_response(self, run_id, prompt, agent_id, thread_id, collection, started_at, finished_at,
                         latency_ms, nodes, events, vector_matches, final_answer, tokens, generator_raw,
-                        intent_result: dict | None = None):
+                        intent_result: dict | None = None,
+                        calculation_extra: dict | None = None):
         request_json = {"prompt": prompt, "agentId": agent_id, "threadId": thread_id,
                          "vectorProvider": "chroma", "collection": collection, "debug": True}
         response = {"id": run_id, "mode": "real", "prompt": prompt, "status": "succeeded",
@@ -643,6 +1101,9 @@ class RagQueryService:
             response["expandedQueries"] = intent_result.get("expanded_queries", [])
             response["responseJson"]["intent"] = intent_result.get("intent", "general")
             response["responseJson"]["expandedQueries"] = intent_result.get("expanded_queries", [])
+        if calculation_extra:
+            for k, v in calculation_extra.items():
+                response[k] = v
         retrieval_debug = {
             "intent": intent_result.get("intent", "general") if intent_result else "general",
             "expandedQueries": intent_result.get("expanded_queries", []) if intent_result else [],
@@ -658,6 +1119,17 @@ class RagQueryService:
             ],
         }
         response["retrievalDebug"] = retrieval_debug
+
+        citations = {}
+        for idx, m in enumerate(vector_matches, start=1):
+            meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
+            citations[str(idx)] = {
+                "title": m.get("title", ""),
+                "sectionTitle": meta.get("section_title", ""),
+                "sourceFile": meta.get("source_file", ""),
+                "contentType": meta.get("content_type", ""),
+            }
+        response["citations"] = citations
         return response
 
 
@@ -714,3 +1186,30 @@ def _chunk_sort_key(match: dict) -> tuple[int, str]:
 
 def _starts_with_numbered_heading(text: str) -> bool:
     return re.match(r"^\s*\d+(?:\.\d+)+\s+", text) is not None
+
+
+_CHINESE_NUM_MAP: dict[str, int] = {
+    "零": 0, "一": 1, "二": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+
+
+def _chinese_to_arabic(text: str) -> int | None:
+    m = re.search(r"第([一二三四五六七八九十\d]+)条", text)
+    if not m:
+        return None
+    num_str = m.group(1)
+    if num_str.isdigit():
+        return int(num_str)
+    if num_str in _CHINESE_NUM_MAP:
+        return _CHINESE_NUM_MAP[num_str]
+    if "十" in num_str:
+        parts = num_str.split("十")
+        left = _CHINESE_NUM_MAP.get(parts[0], 1) if parts[0] else 1
+        right = _CHINESE_NUM_MAP.get(parts[1], 0) if parts[1] else 0
+        return left * 10 + right
+    return None
+
+
+def _extract_article_number(section_title: str) -> int | None:
+    return _chinese_to_arabic(section_title)

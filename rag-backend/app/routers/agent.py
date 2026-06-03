@@ -22,7 +22,8 @@ class AgentRunRequest(BaseModel):
 
 
 class AgentRunV2Request(AgentRunRequest):
-    pass
+    user_id: str = Field(default="default", alias="userId")
+    collected_vars: dict = Field(default_factory=dict, alias="collectedVars")
 
 
 @router.post("/run")
@@ -66,6 +67,8 @@ def run_agent_v2(
             collection=request.collection,
             agent_id=request.agent_id,
             thread_id=request.thread_id,
+            user_id=request.user_id,
+            collected_vars=request.collected_vars,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

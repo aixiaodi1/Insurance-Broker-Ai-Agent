@@ -3,12 +3,65 @@
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { createAgentRun } from "@/lib/api/agent-client";
-import type { AgentApiMode, AgentRun, AgentTraceEvent } from "@/lib/types/agent";
+import type { AgentApiMode, AgentRun, AgentTraceEvent, CitationInfo } from "@/lib/types/agent";
 import { InspectorPanel } from "./inspector-panel";
 import { LeftRail } from "./left-rail";
 import { NodeTimeline } from "./node-timeline";
 import { PromptComposer } from "./prompt-composer";
 import { TraceTimeline } from "./trace-timeline";
+
+function CitationLink({ idx, info }: { idx: string; info: CitationInfo }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      className="citation-marker"
+      onClick={() => setShow(!show)}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ cursor: "pointer", color: "var(--color-accent, #2563eb)", fontWeight: 600 }}
+    >
+      [{idx}]
+      {show ? (
+        <span
+          className="citation-tooltip"
+          style={{
+            position: "absolute",
+            background: "var(--color-surface, #1e293b)",
+            color: "var(--color-text, #e2e8f0)",
+            padding: "6px 10px",
+            borderRadius: 6,
+            fontSize: 13,
+            whiteSpace: "nowrap",
+            zIndex: 100,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+            transform: "translateY(-100%)",
+          }}
+        >
+          {info.sectionTitle || info.title}
+          {info.sourceFile ? ` — ${info.sourceFile}` : ""}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function renderAnswer(text: string, citations?: Record<string, CitationInfo>): React.ReactNode {
+  if (!citations) {
+    return <p>{text}</p>;
+  }
+  const parts = text.split(/(\[\d+\])/g);
+  return (
+    <p>
+      {parts.map((part, i) => {
+        const match = part.match(/^\[(\d+)\]$/);
+        if (match && citations[match[1]]) {
+          return <CitationLink key={i} idx={match[1]} info={citations[match[1]]} />;
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </p>
+  );
+}
 
 interface AgentWorkbenchProps {
   initialRun: AgentRun;
@@ -109,7 +162,7 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
 
         <section className="answer-panel">
           <div className="panel-title">最终回答</div>
-          <p>{run.finalAnswer}</p>
+          {renderAnswer(run.finalAnswer, run.citations)}
         </section>
       </section>
 
