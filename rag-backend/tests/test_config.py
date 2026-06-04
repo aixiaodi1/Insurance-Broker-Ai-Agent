@@ -19,6 +19,7 @@ def test_settings_defaults_are_local_and_safe(tmp_path: Path) -> None:
     assert settings.embedding_api_key == ""
     assert settings.minimax_api_key == ""
     assert settings.max_upload_batch_mb == 100
+    assert settings.insurance_data_dir == Path("E:/保险客户服务/data")
     assert settings.allowed_extensions == [".txt", ".md", ".pdf"]
 
 

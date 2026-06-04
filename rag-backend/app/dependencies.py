@@ -28,6 +28,7 @@ from app.infrastructure.vectorstores.chroma_store import ChromaVectorStore
 from app.retrieval.bm25_indexer import MemoryBM25Indexer
 from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
+from app.services.evidence_source_registry import EvidenceSourceRegistry
 from app.services.job_service import JobService
 from app.services.rag_query_service import RagQueryService
 from app.services.thread_state_store import ThreadStateStore
@@ -216,7 +217,16 @@ def get_rag_query_service() -> RagQueryService:
 
 
 def get_research_agent_graph() -> ResearchAgentGraph:
-    return ResearchAgentGraph(get_rag_query_service())
+    return ResearchAgentGraph(
+        get_rag_query_service(),
+        evidence_source_registry=get_evidence_source_registry(),
+    )
+
+
+@lru_cache
+def get_evidence_source_registry() -> EvidenceSourceRegistry:
+    settings = get_settings()
+    return EvidenceSourceRegistry(settings.insurance_data_dir)
 
 
 def close_cached_dependencies() -> None:
@@ -234,5 +244,6 @@ def close_cached_dependencies() -> None:
     get_reranker.cache_clear()
     get_answer_generator.cache_clear()
     get_queue_client.cache_clear()
+    get_evidence_source_registry.cache_clear()
     if hasattr(get_config_settings, "cache_clear"):
         get_config_settings.cache_clear()

@@ -65,3 +65,29 @@ def test_research_graph_delegates_to_rag_service_and_preserves_response() -> Non
             "collected_vars": {"age": 30},
         }
     ]
+
+
+class FakeEvidenceRegistry:
+    def query(self, prompt: str) -> dict:
+        return {
+            "enabled": True,
+            "summary": "Matched 1 company source entries and 1 official material candidates.",
+            "companyMatches": [{"company": "太平人寿保险有限公司", "sourceTier": "S2_OFFICIAL_SPEC"}],
+            "materialMatches": [{"productName": "太平乐享居一号", "sourceTier": "S1_OFFICIAL_PDF"}],
+        }
+
+
+def test_research_graph_adds_evidence_registry_trace_when_available() -> None:
+    graph = ResearchAgentGraph(FakeRagQueryService(), evidence_source_registry=FakeEvidenceRegistry())
+
+    result = graph.run(
+        prompt="帮我找太平乐享居一号官方资料",
+        collection="guides",
+        agent_id="research-agent",
+        thread_id="thread_1",
+    )
+
+    assert result["nodes"][0]["id"] == "load_evidence_sources"
+    assert result["events"][0]["nodeId"] == "load_evidence_sources"
+    assert result["toolCalls"][0]["name"] == "source_registry_lookup"
+    assert result["responseJson"]["evidenceSourceRegistry"]["materialMatches"][0]["sourceTier"] == "S1_OFFICIAL_PDF"
