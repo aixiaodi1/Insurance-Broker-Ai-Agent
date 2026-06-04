@@ -6,6 +6,7 @@ from app.observability import get_logger
 from app.config import get_settings as get_config_settings
 logger = get_logger(__name__)
 
+from app.agents.research_graph import ResearchAgentGraph
 from app.infrastructure.chunkers.base import Chunker
 from app.infrastructure.chunkers.document_aware import DocumentAwareChunker
 from app.infrastructure.embeddings.base import EmbeddingProvider
@@ -212,6 +213,10 @@ def get_rag_query_service() -> RagQueryService:
         state_store=state_store,
         redis_url=settings.redis_url,
     )
+
+
+def get_research_agent_graph() -> ResearchAgentGraph:
+    return ResearchAgentGraph(get_rag_query_service())
 
 
 def close_cached_dependencies() -> None:

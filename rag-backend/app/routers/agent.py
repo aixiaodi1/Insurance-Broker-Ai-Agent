@@ -3,7 +3,8 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.dependencies import get_llm_semaphore, get_rag_query_service
+from app.agents.research_graph import ResearchAgentGraph
+from app.dependencies import get_llm_semaphore, get_rag_query_service, get_research_agent_graph
 from app.errors import RetryableIngestionError, ValidationError
 from app.sanitization import sanitize_error_message
 from app.services.rag_query_service import RagQueryService
@@ -55,14 +56,14 @@ def run_agent(
 @router.post("/run_v2")
 def run_agent_v2(
     request: AgentRunV2Request,
-    rag_query_service: RagQueryService = Depends(get_rag_query_service),
+    research_agent_graph: ResearchAgentGraph = Depends(get_research_agent_graph),
     semaphore: threading.Semaphore = Depends(get_llm_semaphore),
 ) -> dict:
-    """Hybrid retrieval (BM25 + vector + RRF + CrossEncoder)."""
+    """LangGraph-backed hybrid retrieval agent."""
     if not semaphore.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
     try:
-        return rag_query_service.run(
+        return research_agent_graph.run(
             prompt=request.prompt,
             collection=request.collection,
             agent_id=request.agent_id,

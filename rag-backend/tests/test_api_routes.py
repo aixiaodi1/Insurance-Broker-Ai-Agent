@@ -510,3 +510,52 @@ def test_agent_run_queries_shared_chroma_collection() -> None:
     assert body["vectorMatches"][0]["collection"] == "guides"
     assert body["vectorMatches"][0]["metadata"]["document_type"] == "insurance_clause"
     assert body["nodes"][2]["id"] == "retrieve_context"
+
+
+def test_run_v2_uses_research_agent_graph_dependency() -> None:
+    from app.dependencies import get_research_agent_graph
+
+    class FakeResearchGraph:
+        def run(
+            self,
+            prompt: str,
+            collection: str,
+            agent_id: str,
+            thread_id: str | None,
+            user_id: str = "default",
+            collected_vars: dict | None = None,
+        ) -> dict:
+            return {
+                "id": "run_graph",
+                "mode": "real",
+                "prompt": prompt,
+                "status": "succeeded",
+                "nodes": [{"id": "graph_node", "status": "succeeded"}],
+                "events": [{"id": "evt_graph_node", "nodeId": "graph_node"}],
+                "toolCalls": [],
+                "vectorMatches": [],
+                "requestJson": {"prompt": prompt},
+                "responseJson": {"collection": collection, "userId": user_id},
+                "finalAnswer": "graph answer",
+            }
+
+    client = make_client({get_research_agent_graph: lambda: FakeResearchGraph()})
+
+    response = client.post(
+        "/agent/run_v2",
+        json={
+            "prompt": "等待期是多少",
+            "agentId": "research-agent",
+            "threadId": "thread_graph",
+            "collection": "guides",
+            "userId": "user_graph",
+            "collectedVars": {"age": 30},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "run_graph"
+    assert body["finalAnswer"] == "graph answer"
+    assert body["nodes"][0]["id"] == "graph_node"
+    assert body["responseJson"] == {"collection": "guides", "userId": "user_graph"}

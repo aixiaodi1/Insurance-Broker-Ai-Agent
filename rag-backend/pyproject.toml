@@ -9,6 +9,7 @@ dependencies = [
   "httpx",
   "jieba",
   "jinja2",
+  "langgraph",
   "pydantic-settings",
   "pypdf",
   "PyMuPDF",
