@@ -11,6 +11,10 @@ class WebAcquisitionConfig:
     download_timeout_seconds: int = 30
     page_timeout_seconds: int = 60
     step_timeout_seconds: int = 10
+    browser_use_max_steps: int = 20
+    browser_use_max_navigations: int = 10
+    browser_use_max_clicks: int = 10
+    browser_use_max_runtime_seconds: int = 90
     browser_pool_size: int = 1
     max_redirects: int = 5
     max_file_size_bytes: int = 50 * 1024 * 1024
