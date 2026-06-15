@@ -1,0 +1,21 @@
+version: "2026-06-13"
+plugins:
+  - id: github
+    label: GitHub
+    description: 管理仓库、Issue、Pull Request 和 CI。
+    schema_ref: tools.plugins/github.yaml
+
+  - id: netlify
+    label: Netlify
+    description: 部署站点、管理环境变量和预览发布。
+    schema_ref: tools.plugins/netlify.yaml
+
+  - id: browser
+    label: Browser
+    description: 操作浏览器页面、截图和检查前端交互。
+    schema_ref: tools.plugins/browser.yaml
+
+  - id: database
+    label: Database
+    description: 查询和管理外部数据库连接。
+    schema_ref: tools.plugins/database.yaml

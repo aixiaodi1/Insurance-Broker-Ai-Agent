@@ -1,0 +1,96 @@
+version: "2026-06-13"
+modes:
+  plan:
+    default: ask_for_mutation
+  build:
+    default: allow_low_risk
+normalize:
+  strip_ansi: true
+  nfkc: true
+  remove_backslash_escapes: true
+  remove_empty_string_quotes: true
+  env_aliases:
+    $HERMES_HOME: ~/.hermes
+hard_deny:
+  - id: delete_root
+    pattern: '\brm\s+-[a-zA-Z]*[rRfF][a-zA-Z]*\s+/(?:\s|$|[*])'
+    reason: hardline_blocklist
+    risk: hardline_blocklist
+  - id: delete_home
+    pattern: '\brm\s+-[a-zA-Z]*[rRfF][a-zA-Z]*\s+~(?:\s|$|/)'
+    reason: hardline_blocklist
+    risk: hardline_blocklist
+  - id: format_disk
+    pattern: '\bmkfs(?:\.|[\s])'
+    reason: hardline_blocklist
+    risk: hardline_blocklist
+  - id: write_raw_device
+    pattern: '\bdd\b.*\bof=/dev/(?:sd|hd|nvme|disk)'
+    reason: hardline_blocklist
+    risk: hardline_blocklist
+  - id: fork_bomb
+    pattern: ':\(\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:'
+    reason: hardline_blocklist
+    risk: hardline_blocklist
+ask:
+  - id: delete_file
+    pattern: '\brm\b|\bdel\b|\bremove-item\b|\brmdir\b'
+    reason: dangerous_pattern
+    risk: file_delete
+  - id: permission_change
+    pattern: '\bchmod\s+777\b|\bchown\b'
+    reason: dangerous_pattern
+    risk: permission_change
+  - id: destructive_git
+    pattern: '\bgit\s+push\b.*\s--force\b'
+    reason: dangerous_pattern
+    risk: destructive_git
+  - id: remote_code_execution
+    pattern: '\bcurl\b.*\|\s*(?:sh|bash|zsh|python|node)\b'
+    reason: dangerous_pattern
+    risk: remote_code_execution
+  - id: inline_shell
+    pattern: '\b(?:bash|sh|zsh|powershell|pwsh|cmd)\s+-c\b'
+    reason: dangerous_pattern
+    risk: inline_shell
+  - id: inline_code_execution
+    pattern: '\b(?:python|python3|node|ruby|perl)\s+-[ce]\b'
+    reason: dangerous_pattern
+    risk: inline_code_execution
+  - id: sensitive_write
+    pattern: '(?:>|tee\b).*(?:\.env|\.ssh/|/etc/)'
+    reason: dangerous_pattern
+    risk: sensitive_write
+  - id: database_drop
+    pattern: '\bDROP\s+TABLE\b|\bTRUNCATE\b'
+    reason: dangerous_pattern
+    risk: database_destructive
+  - id: database_delete_without_where
+    pattern: '\bDELETE\s+FROM\b(?!.*\bWHERE\b)'
+    reason: dangerous_pattern
+    risk: database_destructive
+  - id: service_control
+    pattern: '\b(?:systemctl|service)\s+(?:stop|restart|disable)\b'
+    reason: dangerous_pattern
+    risk: service_control
+  - id: process_kill
+    pattern: '\bpkill\b|\bkill\s+-9\b'
+    reason: dangerous_pattern
+    risk: process_kill
+plan_ask:
+  - id: environment_mutation
+    pattern: '\b(?:npm|pnpm|yarn|pip|uv|poetry)\s+(?:install|add|remove|uninstall)\b|\bpython\s+-m\s+pip\s+install\b'
+    reason: plan_mode_guard
+    risk: environment_mutation
+  - id: repository_mutation
+    pattern: '\bgit\s+(?:commit|push|pull|merge|rebase|checkout|switch|reset)\b'
+    reason: plan_mode_guard
+    risk: repository_mutation
+  - id: filesystem_mutation
+    pattern: '\b(?:touch|mkdir|mv|cp)\b'
+    reason: plan_mode_guard
+    risk: filesystem_mutation
+  - id: file_write
+    pattern: '(?:>|>>|tee\b)'
+    reason: plan_mode_guard
+    risk: file_write

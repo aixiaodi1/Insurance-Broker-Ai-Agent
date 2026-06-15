@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_document_service, get_embedder, get_queue_client, get_rag_query_service, get_repository, get_vector_store
@@ -512,10 +514,10 @@ def test_agent_run_queries_shared_chroma_collection() -> None:
     assert body["nodes"][2]["id"] == "retrieve_context"
 
 
-def test_run_v2_uses_research_agent_graph_dependency() -> None:
-    from app.dependencies import get_research_agent_graph
+def test_run_v2_uses_agent_turn_runtime_dependency() -> None:
+    from app.dependencies import get_agent_turn_runtime
 
-    class FakeResearchGraph:
+    class FakeAgentTurnRuntime:
         def run(
             self,
             prompt: str,
@@ -539,7 +541,7 @@ def test_run_v2_uses_research_agent_graph_dependency() -> None:
                 "finalAnswer": "graph answer",
             }
 
-    client = make_client({get_research_agent_graph: lambda: FakeResearchGraph()})
+    client = make_client({get_agent_turn_runtime: lambda: FakeAgentTurnRuntime()})
 
     response = client.post(
         "/agent/run_v2",
@@ -559,3 +561,121 @@ def test_run_v2_uses_research_agent_graph_dependency() -> None:
     assert body["finalAnswer"] == "graph answer"
     assert body["nodes"][0]["id"] == "graph_node"
     assert body["responseJson"] == {"collection": "guides", "userId": "user_graph"}
+
+
+def test_run_v2_stream_uses_agent_turn_runtime_stream_dependency() -> None:
+    from app.dependencies import get_agent_turn_runtime
+
+    class FakeAgentTurnRuntime:
+        def stream(
+            self,
+            prompt: str,
+            collection: str,
+            agent_id: str,
+            thread_id: str | None,
+            user_id: str = "default",
+            collected_vars: dict | None = None,
+        ):
+            yield {"type": "run_started", "summary": prompt}
+            yield {
+                "type": "run_finished",
+                "run": {
+                    "id": "run_stream",
+                    "mode": "real",
+                    "prompt": prompt,
+                    "status": "succeeded",
+                    "nodes": [],
+                    "events": [],
+                    "toolCalls": [],
+                    "vectorMatches": [],
+                    "requestJson": {"prompt": prompt},
+                    "responseJson": {"collection": collection, "userId": user_id},
+                    "finalAnswer": "stream answer",
+                },
+            }
+
+    client = make_client({get_agent_turn_runtime: lambda: FakeAgentTurnRuntime()})
+
+    with client.stream(
+        "POST",
+        "/agent/run_v2/stream",
+        json={
+            "prompt": "hello",
+            "agentId": "research-agent",
+            "threadId": "thread_stream",
+            "collection": "guides",
+            "userId": "user_stream",
+        },
+    ) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    lines = [json.loads(line) for line in body.splitlines() if line.strip()]
+    assert [line["type"] for line in lines] == ["run_started", "run_finished"]
+    assert lines[-1]["run"]["finalAnswer"] == "stream answer"
+
+
+def test_run_v2_non_stream_response_exposes_transparent_events() -> None:
+    from app.dependencies import get_agent_turn_runtime
+
+    class FakeAgentTurnRuntime:
+        def run(
+            self,
+            prompt: str,
+            collection: str,
+            agent_id: str,
+            thread_id: str | None,
+            user_id: str = "default",
+            collected_vars: dict | None = None,
+        ) -> dict:
+            return {
+                "id": "run_transparent",
+                "mode": "real",
+                "prompt": prompt,
+                "status": "succeeded",
+                "nodes": [],
+                "events": [],
+                "toolCalls": [],
+                "vectorMatches": [],
+                "requestJson": {"prompt": prompt},
+                "responseJson": {
+                    "agentRuntime": {"controlMode": "llm_react"},
+                    "publicPlanning": {"intent_anchor": {"user_goal": "show process"}},
+                    "streamEvents": [
+                        {"type": "run_started", "summary": "started"},
+                        {"type": "context_loaded", "summary": "context"},
+                        {"type": "intent_anchor", "summary": "show process"},
+                        {"type": "task_decomposition", "summary": "1 tasks planned."},
+                        {"type": "final_answer", "summary": "Final answer generated.", "finalAnswer": "answer"},
+                        {"type": "run_finished", "summary": "finished"},
+                    ],
+                },
+                "finalAnswer": "answer",
+            }
+
+    client = make_client({get_agent_turn_runtime: lambda: FakeAgentTurnRuntime()})
+
+    response = client.post(
+        "/agent/run_v2",
+        json={
+            "prompt": "show process",
+            "agentId": "research-agent",
+            "threadId": "thread_transparent",
+            "collection": "guides",
+            "userId": "user_transparent",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["responseJson"]["agentRuntime"]["controlMode"] == "llm_react"
+    assert body["responseJson"]["publicPlanning"]["intent_anchor"]["user_goal"] == "show process"
+    assert [event["type"] for event in body["responseJson"]["streamEvents"]] == [
+        "run_started",
+        "context_loaded",
+        "intent_anchor",
+        "task_decomposition",
+        "final_answer",
+        "run_finished",
+    ]

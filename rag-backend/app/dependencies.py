@@ -6,6 +6,7 @@ from app.observability import get_logger
 from app.config import get_settings as get_config_settings
 logger = get_logger(__name__)
 
+from app.agents.agent_turn_runtime import AgentTurnRuntime
 from app.agents.research_graph import ResearchAgentGraph
 from app.infrastructure.chunkers.base import Chunker
 from app.infrastructure.chunkers.document_aware import DocumentAwareChunker
@@ -30,6 +31,7 @@ from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
 from app.services.evidence_source_registry import EvidenceSourceRegistry
 from app.services.job_service import JobService
+from app.services.conversation_memory import ConversationMemoryStore
 from app.services.rag_query_service import RagQueryService
 from app.services.thread_state_store import ThreadStateStore
 
@@ -217,9 +219,25 @@ def get_rag_query_service() -> RagQueryService:
 
 
 def get_research_agent_graph() -> ResearchAgentGraph:
+    settings = get_settings()
     return ResearchAgentGraph(
         get_rag_query_service(),
         evidence_source_registry=get_evidence_source_registry(),
+        planner_generator=get_answer_generator(),
+        memory_store=get_conversation_memory_store(),
+        local_source_root=settings.agent_local_source_root,
+        enable_web_search=settings.agent_enable_web_search,
+    )
+
+
+def get_agent_turn_runtime() -> AgentTurnRuntime:
+    settings = get_settings()
+    return AgentTurnRuntime(
+        generator=get_answer_generator(),
+        insurance_workflow=get_research_agent_graph(),
+        memory_store=get_conversation_memory_store(),
+        project_root=settings.agent_local_source_root,
+        local_source_root=settings.agent_local_source_root,
     )
 
 
@@ -227,6 +245,14 @@ def get_research_agent_graph() -> ResearchAgentGraph:
 def get_evidence_source_registry() -> EvidenceSourceRegistry:
     settings = get_settings()
     return EvidenceSourceRegistry(settings.insurance_data_dir)
+
+
+@lru_cache
+def get_conversation_memory_store() -> ConversationMemoryStore:
+    settings = get_settings()
+    memory = ConversationMemoryStore(settings.database_url)
+    memory.initialize()
+    return memory
 
 
 def close_cached_dependencies() -> None:
@@ -245,5 +271,6 @@ def close_cached_dependencies() -> None:
     get_answer_generator.cache_clear()
     get_queue_client.cache_clear()
     get_evidence_source_registry.cache_clear()
+    get_conversation_memory_store.cache_clear()
     if hasattr(get_config_settings, "cache_clear"):
         get_config_settings.cache_clear()

@@ -1,0 +1,21 @@
+version: "2026-06-13"
+skills:
+  - id: insurance_research
+    name: 保险产品研究
+    description: 查找、分析、整理保险产品公开资料、条款和证据线索。
+    doc_ref: skills/insurance_research.md
+
+  - id: command_safety
+    name: 命令权限判断
+    description: 判断命令应直接执行、人工确认还是拒绝。
+    doc_ref: skills/command_safety.md
+
+  - id: document_review
+    name: 文档审阅
+    description: 审阅保单、条款、截图或 PDF 中的关键信息。
+    doc_ref: skills/document_review.md
+
+  - id: rag_placeholder
+    name: RAG 占位
+    description: 标记知识库检索能力已预留，后续可以替换为完整 RAG 流程。
+    doc_ref: skills/rag_placeholder.md

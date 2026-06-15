@@ -1,0 +1,153 @@
+version: "2026-06-13"
+tools:
+  - id: filesystem.read
+    layer: core
+    always_include: true
+    label: 读取文件
+    description: 读取当前项目内的文本文件、配置文件和代码文件。
+    permission_profile: allow_read
+    keywords: ["读取文件", "查看文件", "检查文件", "本地文件", "read file"]
+
+  - id: filesystem.write
+    layer: core
+    always_include: true
+    label: 写入文件
+    description: 创建或覆盖当前项目内的文件。
+    permission_profile: ask_write
+    keywords: ["写文件", "创建文件", "保存文件", "write file"]
+
+  - id: filesystem.edit
+    layer: core
+    always_include: true
+    label: 编辑文件
+    description: 对当前项目内的文件做小范围修改。
+    permission_profile: ask_write
+    keywords: ["修改文件", "编辑文件", "改代码", "edit file"]
+
+  - id: filesystem.delete
+    layer: core
+    always_include: true
+    label: 删除文件
+    description: 删除当前项目内的文件或目录。
+    permission_profile: ask_delete
+    keywords: ["删除文件", "删文件", "删除目录", "rm", "delete file"]
+
+  - id: filesystem.glob
+    layer: core
+    always_include: true
+    label: 文件匹配
+    description: 按文件名或扩展名查找当前项目文件。
+    permission_profile: allow_read
+    keywords: ["找文件", "glob", "文件名"]
+
+  - id: filesystem.grep
+    layer: core
+    always_include: true
+    label: 内容搜索
+    description: 在当前项目文件中搜索关键词或正则。
+    permission_profile: allow_read
+    keywords: ["搜索内容", "grep", "rg", "查找文本"]
+
+  - id: shell.exec
+    layer: core
+    always_include: true
+    label: 执行命令
+    description: 执行本地 shell、PowerShell、bash 或项目命令。
+    permission_profile: command_guard
+    keywords: ["执行命令", "运行命令", "shell", "bash", "powershell", "命令行"]
+
+  - id: web.search
+    layer: core
+    always_include: true
+    label: 联网搜索
+    description: 搜索公开网页，适合查找最新信息或外部资料。
+    permission_profile: allow_network
+    keywords: ["联网搜索", "web search", "搜索网页"]
+
+  - id: web.fetch
+    layer: core
+    always_include: true
+    label: 打开网页
+    description: 读取指定 URL 的网页内容。
+    permission_profile: allow_network
+    keywords: ["打开网页", "读取网页", "web fetch", "url"]
+
+  - id: github.repo_tree
+    layer: core
+    always_include: true
+    label: 读取 GitHub 仓库目录
+    description: 读取 GitHub 仓库文件树，适合查找 README、skills、tools、plugins、agents、mcp 和配置文件。
+    permission_profile: allow_network
+    keywords: ["github repo tree", "仓库目录", "skills", "tools", "plugins"]
+
+  - id: github.file_read
+    layer: core
+    always_include: true
+    label: 读取 GitHub 文件
+    description: 读取 GitHub 仓库中的指定文件正文，用于基于来源内容回答问题。
+    permission_profile: allow_network
+    keywords: ["github file", "raw", "读取仓库文件", "SKILL.md"]
+
+  - id: skill.search
+    layer: core
+    always_include: true
+    label: 查找技能
+    description: 按名称和描述查找可用技能。
+    permission_profile: allow_read
+    keywords: ["技能", "skill", "能力"]
+
+  - id: skill.load
+    layer: core
+    always_include: true
+    label: 加载技能
+    description: 按需加载技能文档正文。
+    permission_profile: allow_read
+    keywords: ["加载技能", "skill load"]
+
+  - id: tool.search
+    layer: core
+    always_include: true
+    label: 查找工具
+    description: 搜索插件和 MCP 工具索引，不直接加载完整 schema。
+    permission_profile: allow_read
+    keywords: ["工具搜索", "tool search", "mcp"]
+
+  - id: tool.load_schema
+    layer: core
+    always_include: true
+    label: 加载工具 schema
+    description: 需要插件工具时按需加载具体 schema。
+    permission_profile: allow_read
+    keywords: ["工具 schema", "加载 schema"]
+
+  - id: rag.search
+    layer: core
+    always_include: true
+    label: 知识库检索
+    description: 检索保险资料知识库；当前作为占位能力，后续接入完整 RAG。
+    permission_profile: placeholder
+    keywords: ["知识库", "rag", "保险资料"]
+
+  - id: memory.read
+    layer: core
+    always_include: true
+    label: 读取会话记忆
+    description: 读取同一线程里的近期上下文和摘要。
+    permission_profile: allow_read
+    keywords: ["之前", "刚才", "上下文"]
+
+  - id: memory.write
+    layer: core
+    always_include: true
+    label: 写入会话记忆
+    description: 保存对话摘要和最近消息。
+    permission_profile: allow_internal
+    keywords: ["记住", "会话记忆"]
+
+  - id: approval.request
+    layer: core
+    always_include: true
+    label: 请求人工确认
+    description: 对风险操作发起 HITL 确认。
+    permission_profile: allow_internal
+    keywords: ["确认", "审批", "hitl"]

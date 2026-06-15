@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-settings",
   "pypdf",
   "PyMuPDF",
+  "PyYAML",
   "python-multipart",
   "rank_bm25",
   "redis",

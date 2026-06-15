@@ -233,13 +233,157 @@ const debugResponse = document.querySelector("#debug-response");
 const debugEvidence = document.querySelector("#debug-evidence");
 const debugEvidenceContent = document.querySelector("#debug-evidence-content");
 const debugEndpointToggle = document.querySelector("#debug-endpoint-toggle");
+const debugNodes = document.querySelector("#debug-nodes");
+const debugEvents = document.querySelector("#debug-events");
+const debugTools = document.querySelector("#debug-tools");
+const debugVectors = document.querySelector("#debug-vectors");
+const debugRequestJson = document.querySelector("#debug-request-json");
+const debugResponseJson = document.querySelector("#debug-response-json");
+const debugNodeCount = document.querySelector("#debug-node-count");
+const debugEventCount = document.querySelector("#debug-event-count");
+const debugToolCount = document.querySelector("#debug-tool-count");
+const debugVectorCount = document.querySelector("#debug-vector-count");
 
-let debugEndpoint = "/agent/run";
+let debugEndpoint = debugForm.dataset.debugEndpoint || "/agent/run_v2";
 
 debugEndpointToggle.addEventListener("click", () => {
   debugEndpoint = debugEndpoint === "/agent/run" ? "/agent/run_v2" : "/agent/run";
-  debugEndpointToggle.textContent = `端点: ${debugEndpoint}`;
+  debugEndpointToggle.textContent = debugEndpoint === "/agent/run_v2" ? "端点：新版 Agent" : "端点：经典 RAG";
 });
+
+function setText(target, value) {
+  target.textContent = value;
+}
+
+function clearElement(target, fallbackText) {
+  target.textContent = fallbackText;
+}
+
+function debugCard(title, detail, meta) {
+  const row = document.createElement("article");
+  row.className = "debug-item";
+
+  const heading = document.createElement("strong");
+  heading.textContent = title || "-";
+  row.append(heading);
+
+  if (detail) {
+    const body = document.createElement("p");
+    body.textContent = detail;
+    row.append(body);
+  }
+
+  if (meta) {
+    const foot = document.createElement("small");
+    foot.textContent = meta;
+    row.append(foot);
+  }
+
+  return row;
+}
+
+function statusText(status) {
+  const labels = {
+    idle: "空闲",
+    pending: "等待",
+    running: "运行",
+    succeeded: "成功",
+    failed: "失败",
+  };
+  return labels[status] || status || "-";
+}
+
+function renderDebugNodes(nodes) {
+  debugNodes.textContent = "";
+  debugNodeCount.textContent = String(nodes.length);
+  if (!nodes.length) {
+    clearElement(debugNodes, "暂无节点。");
+    return;
+  }
+
+  nodes.forEach((node, index) => {
+    const title = `${index + 1}. ${node.label || node.id || "未命名节点"} · ${statusText(node.status)}`;
+    const detail = node.stateSummary || node.detail || "";
+    const meta = `节点：${node.id || "-"} · 耗时：${node.durationMs ?? 0} 毫秒`;
+    debugNodes.append(debugCard(title, detail, meta));
+  });
+}
+
+function renderDebugEvents(events) {
+  debugEvents.textContent = "";
+  debugEventCount.textContent = String(events.length);
+  if (!events.length) {
+    clearElement(debugEvents, "暂无事件。");
+    return;
+  }
+
+  events.forEach((event, index) => {
+    const title = `${index + 1}. ${event.title || event.type || "事件"}`;
+    const detail = event.detail || "";
+    const meta = `节点：${event.nodeId || "-"} · 类型：${event.type || "-"} · 时间：${event.timestamp || "-"}`;
+    debugEvents.append(debugCard(title, detail, meta));
+  });
+}
+
+function renderDebugToolCalls(toolCalls) {
+  debugTools.textContent = "";
+  debugToolCount.textContent = String(toolCalls.length);
+  if (!toolCalls.length) {
+    clearElement(debugTools, "暂无工具调用。");
+    return;
+  }
+
+  toolCalls.forEach((toolCall, index) => {
+    const title = `${index + 1}. ${toolCall.name || "工具"} · ${statusText(toolCall.status)}`;
+    const detail = toolCall.resultPreview || "";
+    const meta = `节点：${toolCall.nodeId || "-"} · 耗时：${toolCall.durationMs ?? 0} 毫秒`;
+    debugTools.append(debugCard(title, detail, meta));
+  });
+}
+
+function renderDebugVectorMatches(vectorMatches) {
+  debugVectors.textContent = "";
+  debugVectorCount.textContent = String(vectorMatches.length);
+  if (!vectorMatches.length) {
+    clearElement(debugVectors, "暂无向量命中。");
+    return;
+  }
+
+  vectorMatches.forEach((match, index) => {
+    const score = typeof match.score === "number" ? match.score.toFixed(4) : "无分数";
+    const title = `${index + 1}. ${match.title || "知识片段"}`;
+    const detail = match.contentPreview || "";
+    const meta = `集合：${match.collection || "-"} · 来源：${match.provider || "-"} · 分数：${score}`;
+    debugVectors.append(debugCard(title, detail, meta));
+  });
+}
+
+function renderDebugRunDetails(data) {
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const events = Array.isArray(data.events) ? data.events : [];
+  const toolCalls = Array.isArray(data.toolCalls) ? data.toolCalls : [];
+  const vectorMatches = Array.isArray(data.vectorMatches) ? data.vectorMatches : [];
+
+  renderDebugNodes(nodes);
+  renderDebugEvents(events);
+  renderDebugToolCalls(toolCalls);
+  renderDebugVectorMatches(vectorMatches);
+  setText(debugRequestJson, JSON.stringify(data.requestJson || {}, null, 2));
+  setText(debugResponseJson, JSON.stringify(data.responseJson || data, null, 2));
+}
+
+function resetDebugRunDetails(message) {
+  debugNodeCount.textContent = "0";
+  debugEventCount.textContent = "0";
+  debugToolCount.textContent = "0";
+  debugVectorCount.textContent = "0";
+  clearElement(debugNodes, message);
+  clearElement(debugEvents, message);
+  clearElement(debugTools, message);
+  clearElement(debugVectors, message);
+  clearElement(debugRequestJson, message);
+  clearElement(debugResponseJson, message);
+}
 
 function renderEvidenceTag(status) {
   if (status === "valid") return '<span class="evidence-tag tag-valid">有效</span>';
@@ -345,20 +489,36 @@ debugForm.addEventListener("submit", async (event) => {
   submitButton.disabled = true;
   debugResponse.textContent = "正在查询...";
   debugEvidence.style.display = "none";
+  resetDebugRunDetails("正在查询...");
 
   try {
+    const requestBody = {
+      prompt: query,
+      collection: document.querySelector("#collection")?.value || "default",
+      agentId: "debug-agent",
+      threadId: `admin_${Date.now()}`,
+      vectorProvider: "chroma",
+      debug: true,
+    };
+    if (debugEndpoint === "/agent/run_v2") {
+      requestBody.userId = "admin";
+      requestBody.collectedVars = {};
+    }
+
+    debugRequestJson.textContent = JSON.stringify(requestBody, null, 2);
+
     const response = await fetch(debugEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: query,
-        collection: document.querySelector("#collection")?.value || "default",
-        agentId: "debug-agent",
-        debug: true,
-      }),
+      body: JSON.stringify(requestBody),
     });
     const data = await response.json();
     debugResponse.textContent = data.finalAnswer || JSON.stringify(data, null, 2);
+    renderDebugRunDetails({
+      ...data,
+      requestJson: data.requestJson || requestBody,
+      responseJson: data.responseJson || data,
+    });
 
     if (!response.ok) {
       debugResponse.textContent = `查询失败: ${data.detail || JSON.stringify(data)}`;

@@ -79,6 +79,7 @@ def test_rag_query_service_runs_full_pipeline_with_rerank_generation_and_citatio
 
     assert embedder.texts == ["What can be claimed?"]
     assert vector_store.n_results == 20
+    assert "提示词名称：保险条款问答" in generator.prompt
     assert "[1] high.txt / Claims / chunk 0" in generator.prompt
     assert "High priority context with claim rules." in generator.prompt
     assert result["status"] == "succeeded"

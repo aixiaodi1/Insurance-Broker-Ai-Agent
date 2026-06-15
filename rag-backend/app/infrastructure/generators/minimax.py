@@ -3,12 +3,11 @@ import re
 import httpx
 
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
+from app.services.prompt_registry import get_default_prompt_registry
 
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "你是严谨的中文 RAG 问答助手。只能依据用户提供的知识库上下文回答。"
-    "关键结论必须使用 [1]、[2] 这样的引用。资料不足时明确说明知识库中没有足够依据。"
-)
+def _default_system_prompt() -> str:
+    return get_default_prompt_registry().render("default_rag_system").system or ""
 
 
 class MiniMaxGenerator:
@@ -23,7 +22,7 @@ class MiniMaxGenerator:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        selected_system = system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+        selected_system = system_prompt if system_prompt is not None else _default_system_prompt()
 
         payload = {
             "model": self._model,

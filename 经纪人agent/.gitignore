@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+data/**/*.sqlite3
+data/runs/**/events.jsonl
+data/runs/*/
+data/memory/memories/MEMORY.md
+data/memory/memories/USER.md

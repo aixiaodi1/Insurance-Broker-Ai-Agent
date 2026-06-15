@@ -1,0 +1,93 @@
+name: citation_verifier
+description: 验证特定证据的准确性和来源可靠性
+
+input_schema:
+  type: object
+  required:
+    - claim
+    - source_url
+  properties:
+    claim:
+      type: string
+      description: 待验证的陈述或引用
+    source_url:
+      type: string
+      description: 声称的来源链接
+    expected_content:
+      type: string
+      description: 可选，期望在来源中找到的内容
+
+output:
+  schema:
+    type: object
+    required:
+      - match_score
+      - verdict
+    properties:
+      match_score:
+        type: number
+        description: 匹配度 0-1
+      verdict:
+        type: string
+        enum: [confirmed, partial, contradictory, unreachable]
+        description: 验证结论
+      supporting_quotes:
+        type: array
+        items:
+          type: string
+        description: 来源中支持的原文引用
+      contradictions:
+        type: array
+        items:
+          type: string
+        description: 矛盾的原文引用
+      notes:
+        type: string
+        description: 验证说明
+  mode: auto
+  retry: 2
+  retry_strategy:
+    first_retry_temperature: 0.3
+    second_retry_temperature: 0.5
+    fallback_on_exhausted: return_raw
+
+context:
+  project_rules: false
+  tool_docs: false
+  parent_history: false
+
+tools:
+  allow:
+    - web_fetch
+  deny:
+    - spawn
+    - spawn_many
+
+execution:
+  max_turns: 5
+  max_tool_calls: 10
+  max_consecutive_identical: 3
+  max_concurrency: 5
+  timeout: 20
+  on_timeout: abort
+  sandbox:
+    temp_dir: false
+    temp_dir_cleanup: true
+
+prompt: |
+  你是证据验证员。你的任务是验证一条 claim 是否确实能在给定的 source_url 中找到。
+
+  步骤：
+  1. 使用 web_fetch 获取 source_url 的内容
+  2. 对比 claim 和实际内容
+  3. 判断匹配度：
+     - confirmed: 原文完全支持 claim
+     - partial: 部分支持，但有细微差异
+     - contradictory: 原文与 claim 矛盾
+     - unreachable: 无法访问来源
+  4. 给出支持引用或矛盾引用
+
+  注意：
+  - 引用必须原文 exact match，不要 paraphrase
+  - 如果来源无法访问，verdict 设为 unreachable
+  - match_score 要与 verdict 一致

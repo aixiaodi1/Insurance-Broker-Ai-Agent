@@ -1,0 +1,13 @@
+[
+  {
+    "title": "众民保网站示例资料",
+    "company_name": "网站示例公司",
+    "product_name": "众民保",
+    "source_url": "https://example.com/insurance/zhongminbao",
+    "source_tier": "S3",
+    "material_type": "website_example",
+    "chunk_id": "seed-zhongminbao-001",
+    "page": null,
+    "text": "众民保是用于网站示例测试的保险产品资料片段。该片段用于验证RAG引用链路，不代表真实官方保险结论。"
+  }
+]

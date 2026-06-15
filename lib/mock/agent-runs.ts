@@ -6,7 +6,7 @@ const finishedAt = "2026-05-23T06:10:02.420Z";
 export const mockAgentRun: AgentRun = {
   id: "run_mock_001",
   mode: "mock",
-  prompt: "帮我检查 LangGraph Agent 为什么先检索再调用工具。",
+  prompt: "帮我检查智能助理为什么先检索再调用工具。",
   status: "succeeded",
   startedAt,
   finishedAt,
@@ -24,7 +24,7 @@ export const mockAgentRun: AgentRun = {
       startedAt,
       finishedAt: "2026-05-23T06:10:00.120Z",
       durationMs: 120,
-      stateSummary: "接收调试指令，并初始化本次运行的调试状态。"
+      stateSummary: "接收用户问题，并准备本次对话状态。"
     },
     {
       id: "retrieve_context",
@@ -33,7 +33,7 @@ export const mockAgentRun: AgentRun = {
       startedAt: "2026-05-23T06:10:00.130Z",
       finishedAt: "2026-05-23T06:10:00.740Z",
       durationMs: 610,
-      stateSummary: "从 chroma 的 knowledge_base 集合读取到 3 条相关片段。"
+      stateSummary: "从知识库读取到 3 条相关片段。"
     },
     {
       id: "call_tool",
@@ -42,7 +42,7 @@ export const mockAgentRun: AgentRun = {
       startedAt: "2026-05-23T06:10:00.760Z",
       finishedAt: "2026-05-23T06:10:01.360Z",
       durationMs: 600,
-      stateSummary: "把当前图状态传给 inspect_trace 工具进行分析。"
+      stateSummary: "根据检索摘要整理可用信息。"
     },
     {
       id: "generate_answer",
@@ -60,7 +60,7 @@ export const mockAgentRun: AgentRun = {
       startedAt: "2026-05-23T06:10:02.320Z",
       finishedAt,
       durationMs: 100,
-      stateSummary: "整理运行轨迹并结束本次调试。"
+      stateSummary: "整理回答并结束本次对话。"
     }
   ],
   events: [
@@ -70,8 +70,8 @@ export const mockAgentRun: AgentRun = {
       type: "node_start",
       timestamp: startedAt,
       title: "运行开始",
-      detail: "LangGraph 状态已经初始化。",
-      payload: { threadId: "thread_mock_001", debug: true }
+      detail: "对话状态已经准备好。",
+      payload: { threadId: "thread_mock_001" }
     },
     {
       id: "evt_retrieval",
@@ -80,16 +80,16 @@ export const mockAgentRun: AgentRun = {
       timestamp: "2026-05-23T06:10:00.720Z",
       title: "向量检索返回 3 条结果",
       detail: "最高分片段解释了为什么先检索再调用工具。",
-      payload: { provider: "chroma", collection: "knowledge_base", matches: 3 }
+      payload: { matches: 3 }
     },
     {
       id: "evt_tool",
       nodeId: "call_tool",
       type: "tool_call",
       timestamp: "2026-05-23T06:10:01.220Z",
-      title: "inspect_trace 工具完成",
-      detail: "工具返回了状态流转分析。",
-      payload: { tool: "inspect_trace", status: "succeeded" }
+      title: "资料整理完成",
+      detail: "已整理状态流转分析。",
+      payload: { status: "succeeded" }
     },
     {
       id: "evt_generate",
@@ -114,7 +114,7 @@ export const mockAgentRun: AgentRun = {
     {
       id: "tool_001",
       nodeId: "call_tool",
-      name: "inspect_trace",
+      name: "资料整理",
       status: "succeeded",
       arguments: {
         runId: "run_mock_001",
@@ -131,7 +131,7 @@ export const mockAgentRun: AgentRun = {
       provider: "chroma",
       collection: "knowledge_base",
       score: 0.92,
-      title: "LangGraph 路由策略",
+      title: "路由策略",
       contentPreview: "依赖知识库的问题应该先检索上下文，再调用诊断工具。",
       metadata: {
         source: "agent_playbook.md",
@@ -145,7 +145,7 @@ export const mockAgentRun: AgentRun = {
       collection: "knowledge_base",
       score: 0.87,
       title: "轨迹检查工具协议",
-      contentPreview: "inspect_trace 工具需要节点 id、状态摘要和耗时信息。",
+      contentPreview: "检查流程需要节点标识、状态摘要和耗时信息。",
       metadata: {
         source: "tool_contracts.md",
         chunk: 4
@@ -153,11 +153,10 @@ export const mockAgentRun: AgentRun = {
     }
   ],
   requestJson: {
-    prompt: "帮我检查 LangGraph Agent 为什么先检索再调用工具。",
+    prompt: "帮我检查智能助理为什么先检索再调用工具。",
     agentId: "research-agent",
     threadId: "thread_mock_001",
-    vectorProvider: "chroma",
-    debug: true
+    vectorProvider: "chroma"
   },
   responseJson: {
     id: "run_mock_001",
@@ -167,7 +166,7 @@ export const mockAgentRun: AgentRun = {
     vectorMatches: 2
   },
   finalAnswer:
-    "这次 Agent 先进入 retrieve_context，是因为路由器把问题判定为需要知识库上下文。随后 call_tool 节点拿到检索摘要再调用 inspect_trace，因此工具输入更完整。"
+    "这次智能助理先检索资料，是因为路由器把问题判定为需要知识库上下文。随后整理节点拿到检索摘要再组织回答，因此回答依据更完整。"
 };
 
 export function getInitialMockRun(): AgentRun {

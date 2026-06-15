@@ -18,21 +18,9 @@ from app.services.thread_state_store import ThreadStateStore
 from app.services.rule_extractor import extract_rules, get_all_required_vars
 from app.services.var_extractor import extract_user_vars
 from app.services.calculator import calc_reimbursement
+from app.services.prompt_registry import PromptRegistry, get_default_prompt_registry
 
 logger = get_logger(__name__)
-
-_CALCULATION_SYSTEM_PROMPT = (
-    "你是严谨的保险理赔计算助手。以下是根据知识库识别到的计算规则和用户已提供/缺失的信息。\n"
-    "请按以下规则处理：\n"
-    "1. 如果缺少变量，礼貌地列出还缺哪些信息，并引导用户补充。不要说'没有依据'。\n"
-    "2. 不允许根据常识补全保险条款中没有给出的数字（免赔额、赔付比例、限额等）。\n"
-    "3. 不允许由 LLM 自行心算赔付金额。\n"
-    "4. 如果变量齐全，直接使用后端提供的计算结果，不要重新计算。\n"
-    "5. 回答理赔金额时，必须说明计算前提、公式、输入变量、结果和条款引用。\n"
-    "6. 如果条款依据不足，必须明确说'不足以判断'并说明缺少哪类条款依据。\n"
-    "7. 关键结论必须使用 [1]、[2] 这样的引用指向资料编号。\n"
-)
-
 
 class RagQueryService:
     def __init__(
@@ -50,6 +38,7 @@ class RagQueryService:
         embedding_dimension: int = 768,
         state_store: ThreadStateStore | None = None,
         redis_url: str = "",
+        prompt_registry: PromptRegistry | None = None,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -67,6 +56,7 @@ class RagQueryService:
         self._planner = RetrievalPlanner()
         self._state_store = state_store
         self._redis_url = redis_url
+        self._prompt_registry = prompt_registry or get_default_prompt_registry()
 
     def run(
         self,
@@ -666,7 +656,7 @@ class RagQueryService:
             )
             generation = self._generator.generate(
                 calc_prompt,
-                system_prompt=_CALCULATION_SYSTEM_PROMPT,
+                system_prompt=self._calculation_system_prompt(),
             )
             final_answer = str(generation["answer"])
             answer_for_sqlite = final_answer
@@ -680,7 +670,7 @@ class RagQueryService:
             )
             generation = self._generator.generate(
                 calc_prompt,
-                system_prompt=_CALCULATION_SYSTEM_PROMPT,
+                system_prompt=self._calculation_system_prompt(),
             )
             final_answer = str(generation["answer"])
             answer_for_sqlite = final_answer
@@ -847,12 +837,11 @@ class RagQueryService:
             for r in rules
         )
         if not has_valid_rule:
-            return (
-                f"用户提问：{query}\n\n"
-                f"知识库资料：\n{packed_context}\n\n"
-                "当前知识库中没有找到明确的计算规则。请告知用户资料不足，无法识别完整的计算公式，"
-                "需要提供更详细的条款信息才能计算。不要编造规则。"
-            )
+            return self._prompt_registry.render(
+                "claim_calculation_no_rule",
+                query=query,
+                packed_context=packed_context,
+            ).user
         known_lines = "\n".join(
             f"- {var_names.get(k, k)}：{v}" for k, v in collected_vars.items()
         )
@@ -860,15 +849,14 @@ class RagQueryService:
             f"- {var_names.get(v, v)}" for v in missing_vars
         )
         formula = rules[0].get("formula", "") if rules else ""
-        return (
-            f"用户提问：{query}\n\n"
-            f"知识库资料：\n{packed_context}\n\n"
-            f"识别到的计算公式：{formula}\n\n"
-            f"用户已提供的信息：\n{known_lines if known_lines else '(暂无)'}\n\n"
-            f"还缺少以下信息：\n{missing_lines if missing_lines else '(暂无)'}\n\n"
-            "请根据以上信息，礼貌地告诉用户还缺少哪些变量，并引导用户补充。"
-            "不要编造数字。不要自行计算。"
-        )
+        return self._prompt_registry.render(
+            "claim_calculation_missing_vars",
+            query=query,
+            packed_context=packed_context,
+            formula=formula,
+            known_lines=known_lines if known_lines else "(暂无)",
+            missing_lines=missing_lines if missing_lines else "(暂无)",
+        ).user
 
     def _build_calculation_complete_prompt(
         self,
@@ -885,14 +873,15 @@ class RagQueryService:
                 f"- 公式：{calc_result.get('explanation', '')}\n"
                 f"- 计算结果：{calc_result.get('result', '')} 元\n\n"
             )
-        return (
-            f"用户提问：{query}\n\n"
-            f"知识库资料：\n{packed_context}\n\n"
-            f"{calculation_text}"
-            "请向用户解释计算过程和结果，引用相关条款。"
-            "必须在回答中说明计算前提——以用户提供信息准确且费用属于条款认可范围为前提。"
-            "保留必要提示：最终仍需看费用是否属于可赔范围、是否触发年度限额、是否经过社保结算等。"
-        )
+        return self._prompt_registry.render(
+            "claim_calculation_complete",
+            query=query,
+            packed_context=packed_context,
+            calculation_text=calculation_text,
+        ).user
+
+    def _calculation_system_prompt(self) -> str:
+        return self._prompt_registry.render("claim_calculation_system").system or ""
 
     def _analyze_intent(self, prompt: str) -> dict:
         intent = classify_intent(prompt)
@@ -935,52 +924,11 @@ class RagQueryService:
         return expanded_matches
 
     def _build_generation_prompt(self, query: str, packed_context: str) -> str:
-        return (
-            "你是一个严谨的保险条款分析助手，基于以下知识库资料回答问题。\n\n"
-            "要求：\n"
-            "1. 只能使用知识库资料中的信息，不得根据常识补充保险责任。\n"
-            "2. 每个关键结论必须带 [1]、[2] 这样的引用指向资料编号。\n"
-            "   引用编号 [N] 对应的章节标题已标注在上下文开头（如「第九条 免赔额」），\n"
-            "   你必须使用 [N] 对应的准确条款号，不得混用。\n"
-            "   例如：若 [1] 标注为「第九条 免赔额」，则正文中只能写 [1]（第九条），不能写成 [1]（第十一条）。\n"
-            "3. 涉及数字、百分比、年龄、次数、等待期时，必须确认该数字存在于资料中。\n"
-            "4. 回答赔不赔时，必须同时考虑保险责任和责任免除条款。\n"
-            "   当问题涉及意外受伤原因（如崴脚、摔倒、扭伤、撞伤、骨折等），\n"
-            "   你必须检索知识库中是否包含责任免除条款，判断是否属于高风险运动（滑雪、攀岩、赛车等）导致的伤害。\n"
-            "5. 回答疾病算不算时，必须基于疾病定义条款判定。\n"
-            "6. 如果资料不足，直接说明「知识库中没有足够依据」。\n"
-            "7. 必须严格按照以下结构组织回答，段落之间空一行：\n"
-            "\n"
-            "**结论：**\n"
-            "（简明回答能否赔付，一句话说清）\n"
-            "\n"
-            "**依据：**\n"
-            "（逐条列出，每条另起一行，引用具体条款编号）\n"
-            "\n"
-            "**注意事项：**\n"
-            "（免责、等待期、医院范围、费用合理性等限制条件）\n"
-            "\n"
-            "**需要用户确认的信息：**\n"
-            "（列出知识库缺失、需要用户查看保单才能确定的变量，见第8条）\n"
-            "\n"
-            "8. 如果回答依赖于保单上载明的个性化信息（如年度免赔额、赔付比例、投保日期、\n"
-            "    交费年限、承保期限等），而知识库中没有这些具体数字，你必须按以下优先级\n"
-            "    引导用户：\n"
-            "\n"
-            "    方案一（推荐，成本最低）：\n"
-            "    建议用户直接上传电子保单的关键页面截图或PDF——包含现金价值页、\n"
-            "    免赔额页、交费年限页、承保期限页。系统可以直接从这些页面提取\n"
-            "    所需信息，用户无需自行查找。\n"
-            "\n"
-            "    方案二（备选）：\n"
-            "    如果用户不方便上传，也可以手动提供关键信息，例如\n"
-            "    「我的免赔额是XX元，投保日期是XXXX年XX月」。\n"
-            "\n"
-            "    用自然语言向用户解释为什么方案一更优（上传后系统自动识别、\n"
-            "    一劳永逸），同时给出方案二作为兜底。\n\n"
-            f"问题：{query}\n\n"
-            f"知识库资料：\n{packed_context}"
-        )
+        return self._prompt_registry.render(
+            "rag_clause_qa",
+            query=query,
+            packed_context=packed_context,
+        ).user
 
     def _check_citation_article_mismatch(self, answer: str, vector_matches: list[dict]) -> list[dict]:
         mismatches: list[dict] = []

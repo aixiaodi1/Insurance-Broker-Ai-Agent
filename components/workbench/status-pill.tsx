@@ -6,6 +6,7 @@ const statusLabels: Record<Status, string> = {
   idle: "空闲",
   pending: "等待中",
   running: "运行中",
+  awaiting_approval: "等待确认",
   succeeded: "成功",
   failed: "失败"
 };

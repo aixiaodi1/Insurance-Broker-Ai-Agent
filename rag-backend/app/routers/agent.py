@@ -1,10 +1,12 @@
+import json
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
-from app.agents.research_graph import ResearchAgentGraph
-from app.dependencies import get_llm_semaphore, get_rag_query_service, get_research_agent_graph
+from app.agents.agent_turn_runtime import AgentTurnRuntime
+from app.dependencies import get_agent_turn_runtime, get_llm_semaphore, get_rag_query_service
 from app.errors import RetryableIngestionError, ValidationError
 from app.sanitization import sanitize_error_message
 from app.services.rag_query_service import RagQueryService
@@ -56,14 +58,14 @@ def run_agent(
 @router.post("/run_v2")
 def run_agent_v2(
     request: AgentRunV2Request,
-    research_agent_graph: ResearchAgentGraph = Depends(get_research_agent_graph),
+    agent_turn_runtime: AgentTurnRuntime = Depends(get_agent_turn_runtime),
     semaphore: threading.Semaphore = Depends(get_llm_semaphore),
 ) -> dict:
-    """LangGraph-backed hybrid retrieval agent."""
+    """General agent runtime with ReAct tools and insurance workflow delegation."""
     if not semaphore.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
     try:
-        return research_agent_graph.run(
+        return agent_turn_runtime.run(
             prompt=request.prompt,
             collection=request.collection,
             agent_id=request.agent_id,
@@ -80,3 +82,36 @@ def run_agent_v2(
         raise HTTPException(status_code=500, detail=f"RAG query failed: {detail}") from exc
     finally:
         semaphore.release()
+
+
+@router.post("/run_v2/stream")
+def run_agent_v2_stream(
+    request: AgentRunV2Request,
+    agent_turn_runtime: AgentTurnRuntime = Depends(get_agent_turn_runtime),
+    semaphore: threading.Semaphore = Depends(get_llm_semaphore),
+) -> StreamingResponse:
+    """NDJSON stream for the general agent runtime."""
+    if not semaphore.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
+
+    def iter_events():
+        try:
+            for event in agent_turn_runtime.stream(
+                prompt=request.prompt,
+                collection=request.collection,
+                agent_id=request.agent_id,
+                thread_id=request.thread_id,
+                user_id=request.user_id,
+                collected_vars=request.collected_vars,
+            ):
+                yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
+        except Exception as exc:
+            detail = sanitize_error_message(str(exc))
+            yield json.dumps(
+                {"type": "error", "summary": f"Agent stream failed: {detail}"},
+                ensure_ascii=False,
+            ) + "\n"
+        finally:
+            semaphore.release()
+
+    return StreamingResponse(iter_events(), media_type="application/x-ndjson")

@@ -3,35 +3,9 @@ import re
 
 from app.infrastructure.generators.base import AnswerGenerator
 from app.observability import get_logger
+from app.services.prompt_registry import get_default_prompt_registry
 
 logger = get_logger(__name__)
-
-_RULE_EXTRACTION_PROMPT = (
-    "你是一个保险条款分析专家。请从以下知识库资料中抽取理赔计算相关的结构化规则。\n\n"
-    "如果没有找到任何计算规则，返回空列表 []。\n\n"
-    "请严格按以下 JSON Schema 返回一个数组（即使只有一条规则也要用数组包装）：\n"
-    '{{\n'
-    '  "rule_type": "medical_reimbursement" 或 "fixed_benefit" 或 "unknown",\n'
-    '  "formula": "自然语言描述的计算公式",\n'
-    '  "formula_expr": "带变量名的公式表达式，如 (eligible_expense - deductible) * reimbursement_ratio",\n'
-    '  "required_vars": ["变量名1", "变量名2"],\n'
-    '  "optional_vars": ["变量名1"],\n'
-    '  "limits": {{"annual_limit": null, "single_limit": null, "notes": ""}},\n'
-    '  "evidence": [{{"chunk_id": "来源ID", "text": "原文片段"}}]\n'
-    '}}\n\n'
-    "可用的标准变量名：\n"
-    "- medical_expense: 医疗费用金额\n"
-    "- eligible_expense: 可赔费用金额\n"
-    "- deductible: 免赔额\n"
-    "- reimbursement_ratio: 赔付比例（小数，如 1.0 表示 100%）\n"
-    "- social_insurance_used: 是否经社保结算（true/false）\n"
-    "- annual_limit: 年度限额\n"
-    "- single_limit: 单次限额\n"
-    "- hospital_level: 医院等级\n"
-    "- disease_name: 疾病名称\n"
-    "- claim_type: 理赔类型\n\n"
-    "知识库资料：\n{context}"
-)
 
 _KNOWN_VAR_NAMES = {
     "medical_expense", "eligible_expense", "deductible",
@@ -52,7 +26,7 @@ _DEFAULT_RULE = {
 
 
 def extract_rules(context: str, generator: AnswerGenerator) -> list[dict]:
-    prompt = _RULE_EXTRACTION_PROMPT.format(context=context)
+    prompt = get_default_prompt_registry().render("rule_extraction", context=context).user
     try:
         result = generator.generate(prompt)
         answer = str(result.get("answer", ""))

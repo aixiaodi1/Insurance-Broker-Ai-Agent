@@ -1,20 +1,11 @@
 import { NextResponse } from "next/server";
 
+import type { CreateAgentRunInput } from "@/lib/types/agent";
+
 export async function POST(request: Request) {
-  const apiBaseUrl = process.env.AGENT_API_BASE_URL;
-
-  if (!apiBaseUrl) {
-    return NextResponse.json(
-      {
-        message: "还没有配置 AGENT_API_BASE_URL，无法连接 FastAPI 后端",
-        statusCode: 503
-      },
-      { status: 503 }
-    );
-  }
-
-  const body = await request.json();
-  const upstreamUrl = new URL("/agent/run", apiBaseUrl);
+  const apiBaseUrl = process.env.AGENT_API_BASE_URL ?? "http://127.0.0.1:8000";
+  const body = (await request.json()) as CreateAgentRunInput;
+  const upstreamUrl = new URL("/agent/run_v2", apiBaseUrl);
 
   try {
     const upstream = await fetch(upstreamUrl, {
@@ -27,7 +18,7 @@ export async function POST(request: Request) {
     if (!upstream.ok) {
       return NextResponse.json(
         {
-          message: "FastAPI 运行 Agent 失败",
+          message: "后端运行失败",
           statusCode: upstream.status,
           payload
         },
@@ -44,7 +35,7 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        message: error instanceof Error ? error.message : "FastAPI 运行 Agent 失败",
+        message: error instanceof Error ? error.message : "后端运行失败",
         statusCode: 502
       },
       { status: 502 }

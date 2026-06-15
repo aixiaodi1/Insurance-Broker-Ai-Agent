@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     max_upload_batch_mb: int = 100
     insurance_data_dir: Path = Path("E:/保险客户服务/data")
+    agent_local_source_root: Path = Path("./data")
+    agent_enable_web_search: bool = True
     allowed_extensions_raw: str = Field(default=".txt,.md,.pdf", alias="ALLOWED_EXTENSIONS")
 
     @model_validator(mode="before")

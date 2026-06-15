@@ -26,7 +26,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -113,13 +114,19 @@ label {
   font-weight: 700;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 12px 14px;
   background: #fffdf8;
   color: var(--ink);
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 button {
@@ -250,6 +257,108 @@ button:disabled {
   line-height: 1.45;
 }
 
+.debug-card {
+  grid-column: 1 / -1;
+}
+
+.debug-form .toolbar {
+  margin-top: 10px;
+}
+
+.debug-workbench {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.debug-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  background: #fffdf8;
+}
+
+.debug-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.debug-panel-heading h3 {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 1rem;
+}
+
+.debug-panel-heading span {
+  min-width: 28px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  text-align: center;
+  color: var(--accent-dark);
+  background: #f2eadb;
+  font-weight: 700;
+}
+
+.debug-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  color: var(--muted);
+}
+
+.debug-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: #fffaf0;
+}
+
+.debug-item strong,
+.debug-item p,
+.debug-item small {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.debug-item strong {
+  color: var(--ink);
+}
+
+.debug-item p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.debug-item small {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.debug-json {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fffaf0;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .debug-evidence {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -321,7 +430,8 @@ button:disabled {
 
   .grid,
   .card-heading,
-  .toolbar {
+  .toolbar,
+  .debug-workbench {
     display: grid;
     grid-template-columns: 1fr;
   }

@@ -1,0 +1,25 @@
+version: "2026-06-13"
+intents:
+  - id: file_read
+    keywords: ["检查本地文件", "检查我本地的文件", "读取本地文件", "查看本地文件", "本地的文件", "检查文件", "本地文件"]
+    matched_tools: ["filesystem.read", "filesystem.glob", "filesystem.grep"]
+    answer: "可以。我可以检查本地文件、搜索内容、读取代码和配置。涉及写入、删除或危险命令时会先让你确认；特别危险的命令会直接拒绝。你可以直接说要检查哪个目录、文件名或关键词。"
+
+  - id: file_delete
+    keywords: ["删除文件", "删文件", "删除目录", "删目录", "delete file"]
+    matched_tools: ["filesystem.delete", "approval.request"]
+    answer: "可以处理删除文件这类请求，但不会静默执行。删除文件会先让你确认；删除根目录、格式化磁盘这类特别危险操作会直接拒绝。"
+
+  - id: shell_exec
+    keywords: ["执行命令", "运行命令", "shell", "bash", "powershell", "命令行"]
+    matched_tools: ["shell.exec", "approval.request"]
+    answer: "可以。我可以执行 shell、PowerShell、bash 或项目命令。普通读取类命令可以直接跑；写入、删除、强推、远程脚本执行等风险命令会先确认，特别危险命令会直接拒绝。"
+
+  - id: overview
+    keywords: ["你能做什么", "你会什么", "有哪些工具", "什么能力", "能干什么"]
+    matched_tools: ["filesystem.read", "filesystem.edit", "shell.exec", "web.search", "rag.search", "skill.load"]
+    answer: "我可以处理项目内的文件检查、内容搜索、代码修改、命令执行、联网查资料、GitHub/网页研究和按需加载技能；保险研究是我的专业能力之一。读操作通常直接执行；写入、删除和危险命令会走确认；RAG 目前先保留占位，后续可以接入完整知识库。"
+
+fallback:
+  matched_tools: ["filesystem.read", "shell.exec", "web.search", "skill.load"]
+  answer: "可以先帮你判断能不能做。我的能力来自工具清单和权限配置：读操作通常可直接执行，写入、删除和危险命令会先确认，特别危险操作会直接拒绝。"

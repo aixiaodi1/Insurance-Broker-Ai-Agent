@@ -1,6 +1,6 @@
 export type AgentApiMode = "mock" | "real";
 
-export type AgentRunStatus = "idle" | "running" | "succeeded" | "failed";
+export type AgentRunStatus = "idle" | "running" | "succeeded" | "failed" | "awaiting_approval";
 
 export type AgentNodeStatus = "pending" | "running" | "succeeded" | "failed";
 
@@ -68,6 +68,49 @@ export interface CitationInfo {
   contentType: string;
 }
 
+export interface AgentApprovalRequest {
+  id: string;
+  type: "command";
+  command: string;
+  normalizedCommand: string;
+  mode: "plan" | "build";
+  risk: string;
+  reason: string;
+}
+
+export type AgentStreamEventType =
+  | "run_started"
+  | "context_loaded"
+  | "intent_anchor"
+  | "task_decomposition"
+  | "thinking"
+  | "react_decision"
+  | "tool_started"
+  | "tool_finished"
+  | "observation"
+  | "approval_required"
+  | "workflow_started"
+  | "workflow_finished"
+  | "final_answer"
+  | "run_finished"
+  | "error";
+
+export interface AgentStreamEvent {
+  type: AgentStreamEventType;
+  timestamp?: string;
+  summary?: string;
+  run?: AgentRun;
+  finalAnswer?: string;
+  approvalRequest?: AgentApprovalRequest;
+  context?: Record<string, unknown>;
+  intent?: Record<string, unknown>;
+  taskDecomposition?: Record<string, unknown>;
+  observation?: Record<string, unknown>;
+  step?: Record<string, unknown>;
+  toolCall?: AgentToolCall;
+  workflow?: Record<string, unknown>;
+}
+
 export interface AgentRun {
   id: string;
   mode: AgentApiMode;
@@ -85,6 +128,20 @@ export interface AgentRun {
   responseJson: Record<string, unknown>;
   finalAnswer: string;
   citations?: Record<string, CitationInfo>;
+  approvalRequest?: AgentApprovalRequest;
+}
+
+export interface AgentSession {
+  id: string;
+  threadId: string;
+  title: string;
+  status: AgentRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  runs: AgentRun[];
+  activeRunId?: string;
+  pinned?: boolean;
+  archived?: boolean;
 }
 
 export interface CreateAgentRunInput {
@@ -92,7 +149,7 @@ export interface CreateAgentRunInput {
   agentId: string;
   threadId?: string;
   vectorProvider: "tencent-vectordb" | "chroma";
-  debug: boolean;
+  collectedVars?: Record<string, unknown>;
 }
 
 export class AgentRunError extends Error {

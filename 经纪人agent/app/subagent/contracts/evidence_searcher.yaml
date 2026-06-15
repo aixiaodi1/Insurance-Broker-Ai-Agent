@@ -1,0 +1,101 @@
+name: evidence_searcher
+description: 搜索官方保险证据，返回结构化证据条目
+
+input_schema:
+  type: object
+  required:
+    - product_name
+  properties:
+    product_name:
+      type: string
+      description: 保险产品全称
+    date_range:
+      type: string
+      description: 可选，搜索时间范围，如 2024-2025
+    max_results:
+      type: integer
+      description: 可选，最多返回结果数，默认 5
+
+output:
+  schema:
+    type: object
+    required:
+      - items
+    properties:
+      items:
+        type: array
+        description: 证据条目列表
+        items:
+          type: object
+          required:
+            - title
+            - source_tier
+            - confidence
+          properties:
+            title:
+              type: string
+              description: 证据标题
+            url:
+              type: string
+              description: 来源链接
+            source_tier:
+              type: string
+              enum: [S1, S2, S3, S4, S5]
+              description: 证据等级（S1=保司官网, S2=政府/监管, S3=行业协会, S4=新闻, S5=其他）
+            confidence:
+              type: number
+              description: 置信度 0-1
+            supporting_quote:
+              type: string
+              description: 关键原文引用
+            reasoning:
+              type: string
+              description: 为什么判定为此等级
+  mode: auto
+  retry: 2
+  retry_strategy:
+    first_retry_temperature: 0.3
+    second_retry_temperature: 0.5
+    fallback_on_exhausted: return_raw
+
+context:
+  project_rules: false
+  tool_docs: true
+  parent_history: false
+
+tools:
+  allow:
+    - web_search
+    - web_fetch
+    - local_search
+    - local_read
+  deny:
+    - spawn
+    - spawn_many
+
+execution:
+  max_turns: 10
+  max_tool_calls: 30
+  max_consecutive_identical: 3
+  max_concurrency: 3
+  timeout: 30
+  on_timeout: retry_once
+  sandbox:
+    temp_dir: true
+    temp_dir_cleanup: true
+
+prompt: |
+  你是保险产品证据研究员。你的任务是根据父 agent 提供的产品名称，
+  搜索并验证该保险产品的官方信息。
+
+  步骤：
+  1. 使用 web_search 搜索产品名称 + 关键词（官网、条款、费率等）
+  2. 对找到的链接使用 web_fetch 提取内容
+  3. 判断证据等级：S1=保司官网/官方条款 PDF，S2=监管/政府网站，
+     S3=行业协会/中介平台，S4=新闻/自媒体，S5=其他
+  4. 对每条证据给出置信度和理由
+
+  注意：
+  - 只返回已验证的信息，不要编造
+  - 引用原文时保持原样，不要改写
+  - 如果搜索不到可靠信息，confidence 应设较低值

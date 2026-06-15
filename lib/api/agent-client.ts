@@ -1,9 +1,11 @@
 import { getInitialMockRun } from "@/lib/mock/agent-runs";
 import {
   AgentRunError,
+  type AgentApprovalRequest,
   type AgentApiMode,
   type AgentNode,
   type AgentRun,
+  type AgentStreamEvent,
   type AgentTraceEvent,
   type AgentVectorMatch,
   type CreateAgentRunInput
@@ -66,6 +68,36 @@ function normalizeVectorMatches(value: unknown): AgentVectorMatch[] {
   });
 }
 
+function normalizeApprovalRequest(value: unknown): AgentApprovalRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const { id, type, command, normalizedCommand, mode, risk, reason } = value;
+
+  if (
+    typeof id !== "string" ||
+    type !== "command" ||
+    typeof command !== "string" ||
+    typeof normalizedCommand !== "string" ||
+    (mode !== "plan" && mode !== "build") ||
+    typeof risk !== "string" ||
+    typeof reason !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    id,
+    type,
+    command,
+    normalizedCommand,
+    mode,
+    risk,
+    reason
+  };
+}
+
 function buildFallbackNodes(run: AgentRun): AgentNode[] {
   return [
     {
@@ -73,7 +105,7 @@ function buildFallbackNodes(run: AgentRun): AgentNode[] {
       label: "收到问题",
       status: run.status === "failed" ? "failed" : "succeeded",
       startedAt: run.startedAt,
-      stateSummary: "网站已经把你的问题发送给 FastAPI 后端。"
+      stateSummary: "网站已经把你的问题发送给后端。"
     },
     {
       id: "retrieve_context",
@@ -158,7 +190,8 @@ export function normalizeAgentRun(value: unknown): AgentRun {
     events: Array.isArray(value.events) ? value.events : [],
     toolCalls: Array.isArray(value.toolCalls) ? value.toolCalls : [],
     requestJson: isRecord(value.requestJson) ? value.requestJson : {},
-    responseJson: isRecord(value.responseJson) ? value.responseJson : {}
+    responseJson: isRecord(value.responseJson) ? value.responseJson : {},
+    approvalRequest: normalizeApprovalRequest(value.approvalRequest)
   };
 
   return {
@@ -174,6 +207,10 @@ export function normalizeAgentRun(value: unknown): AgentRun {
 
 export interface CreateAgentRunOptions {
   mode?: AgentApiMode;
+}
+
+export interface StreamAgentRunOptions extends CreateAgentRunOptions {
+  onEvent?: (event: AgentStreamEvent) => void;
 }
 
 export async function createAgentRun(
@@ -214,10 +251,104 @@ export async function createAgentRun(
     const message =
       isRecord(payload) && typeof payload.message === "string"
         ? payload.message
-        : "Agent 运行请求失败";
+        : "请求失败";
 
     throw new AgentRunError(message, response.status, payload);
   }
 
   return normalizeAgentRun(payload);
+}
+
+export async function streamAgentRun(
+  input: CreateAgentRunInput,
+  options: StreamAgentRunOptions = {}
+): Promise<AgentRun> {
+  const mode = options.mode ?? "mock";
+
+  if (mode === "mock") {
+    const run = await createAgentRun(input, { mode: "mock" });
+    options.onEvent?.({ type: "run_started", summary: "Mock run started." });
+    options.onEvent?.({ type: "run_finished", run });
+    return run;
+  }
+
+  const response = await fetch("/api/agent/run/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new AgentRunError("请求失败", response.status);
+  }
+  if (!response.body) {
+    throw new AgentRunError("后端没有返回流", response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalRun: AgentRun | undefined;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const event = parseStreamEvent(line);
+        if (!event) {
+          continue;
+        }
+        const normalizedEvent = normalizeStreamEvent(event);
+        options.onEvent?.(normalizedEvent);
+        if (normalizedEvent.type === "run_finished" && normalizedEvent.run) {
+          finalRun = normalizeAgentRun(normalizedEvent.run);
+        }
+      }
+    }
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseStreamEvent(buffer);
+    if (event) {
+      const normalizedEvent = normalizeStreamEvent(event);
+      options.onEvent?.(normalizedEvent);
+      if (normalizedEvent.type === "run_finished" && normalizedEvent.run) {
+        finalRun = normalizeAgentRun(normalizedEvent.run);
+      }
+    }
+  }
+
+  if (!finalRun) {
+    throw new AgentRunError("后端流没有返回最终结果", response.status);
+  }
+  return finalRun;
+}
+
+function parseStreamEvent(line: string): unknown {
+  if (!line.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStreamEvent(value: unknown): AgentStreamEvent {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return { type: "error", summary: "Invalid stream event." };
+  }
+  const event = value as unknown as AgentStreamEvent;
+  return {
+    ...event,
+    run: event.run ? normalizeAgentRun(event.run) : undefined,
+    approvalRequest: normalizeApprovalRequest(event.approvalRequest)
+  };
 }
