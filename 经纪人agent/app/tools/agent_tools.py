@@ -102,16 +102,21 @@ def web_search(query: str, limit: int = 5) -> ToolResult:
         return ToolResult(ok=False, source="web_search", data={"query": query, "results": []}, error=fetched.error)
 
     results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
     for match in re.finditer(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', fetched.data.get("raw_html", ""), re.I | re.S):
+        result_url = _normalize_result_url(_unwrap_bing_url(html.unescape(match.group(1))))
+        if not result_url or result_url in seen_urls:
+            continue
+        seen_urls.add(result_url)
         results.append(
             {
                 "title": _clean_text(match.group(2)),
-                "url": _unwrap_bing_url(html.unescape(match.group(1))),
+                "url": result_url,
             }
         )
         if len(results) >= limit:
             break
-    return ToolResult(ok=True, source="web_search", data={"query": query, "results": results})
+    return ToolResult(ok=True, source="web_search", data={"query": query, "results": results, "content_kind": "search_results"})
 
 
 def web_fetch(url: str, max_chars: int = 4000) -> ToolResult:
@@ -124,7 +129,8 @@ def web_fetch(url: str, max_chars: int = 4000) -> ToolResult:
         return ToolResult(ok=False, source="web_fetch", data={"url": url}, error=type(exc).__name__)
 
     text = body.decode("utf-8", errors="ignore")
-    plain_text = _clean_text(_html_to_text(text)) if "html" in content_type else text[:max_chars]
+    is_html = "html" in content_type
+    plain_text = _clean_text(_html_to_text(_strip_non_content_html(text))) if is_html else text[:max_chars]
     return ToolResult(
         ok=True,
         source="web_fetch",
@@ -132,6 +138,7 @@ def web_fetch(url: str, max_chars: int = 4000) -> ToolResult:
             "url": url,
             "domain": urlparse(url).netloc,
             "content_type": content_type,
+            "content_kind": "webpage_text" if is_html else "raw_text",
             "text": plain_text[:max_chars],
             "raw_html": text[:max_chars],
         },
@@ -203,8 +210,25 @@ def _html_to_text(text: str) -> str:
     return parser.text()
 
 
+def _strip_non_content_html(text: str) -> str:
+    stripped = text
+    for tag in ("script", "style", "noscript", "svg", "nav", "header", "footer"):
+        stripped = re.sub(rf"<{tag}\b[^>]*>.*?</{tag}>", " ", stripped, flags=re.I | re.S)
+    return stripped
+
+
 def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text))).strip()
+
+
+def _normalize_result_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    normalized = parsed._replace(fragment="").geturl()
+    return normalized.rstrip("/")
 
 
 def _unwrap_bing_url(url: str) -> str:

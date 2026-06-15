@@ -44,3 +44,72 @@ def test_unified_tool_registry_exposes_local_search_and_cli_for_react(tmp_path):
     assert search_result.data["matches"][0]["path"] == str(source_file)
     assert cli_result.ok is True
     assert "AlphaCare local marker" in cli_result.data["stdout"]
+
+
+def test_web_fetch_extracts_readable_text_and_filters_script_noise(monkeypatch):
+    import app.tools.agent_tools as agent_tools
+
+    class FakeResponse:
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _size):
+            return b"""
+            <html>
+              <head>
+                <style>.hidden { display: none; }</style>
+                <script>window.__DATA__ = {"noisy": true};</script>
+              </head>
+              <body>
+                <nav>Home Products Login</nav>
+                <main>
+                  <h1>Official Tool Reference</h1>
+                  <p>The default runtime tools are listed in this document.</p>
+                </main>
+              </body>
+            </html>
+            """
+
+    monkeypatch.setattr(agent_tools, "urlopen", lambda request, timeout=10: FakeResponse())
+
+    result = agent_tools.web_fetch("https://docs.example.test/tools")
+
+    assert result.ok is True
+    assert "Official Tool Reference" in result.data["text"]
+    assert "default runtime tools" in result.data["text"]
+    assert "window.__DATA__" not in result.data["text"]
+    assert "display: none" not in result.data["text"]
+    assert result.data["content_kind"] == "webpage_text"
+
+
+def test_web_search_deduplicates_results(monkeypatch):
+    import app.tools.agent_tools as agent_tools
+    from app.memory.schemas import ToolResult
+
+    raw_html = """
+    <h2><a href="https://docs.example.test/tools">Tools</a></h2>
+    <h2><a href="https://docs.example.test/tools">Tools Duplicate</a></h2>
+    <h2><a href="https://github.com/example/project">Project</a></h2>
+    """
+    monkeypatch.setattr(
+        agent_tools,
+        "web_fetch",
+        lambda url, max_chars=160000: ToolResult(
+            ok=True,
+            source="web_fetch",
+            data={"raw_html": raw_html, "text": "Tools Project"},
+        ),
+    )
+
+    result = agent_tools.web_search("example project tools", limit=5)
+
+    assert result.ok is True
+    assert [item["url"] for item in result.data["results"]] == [
+        "https://docs.example.test/tools",
+        "https://github.com/example/project",
+    ]
