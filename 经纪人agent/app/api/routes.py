@@ -137,7 +137,7 @@ def _run_id_from_events(events: list[dict]) -> str | None:
 def _visible_steps_from_events(events: list[dict]) -> list[dict]:
     visible = []
     for event in events:
-        if event.get("type") in {"intent_anchor", "task_decomposition", "tool_started", "tool_finished", "observation"}:
+        if event.get("type") in {"intent_anchor", "task_decomposition", "tool_boundary", "tool_started", "tool_finished", "observation"}:
             visible.append(
                 {
                     "type": event.get("type"),

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from app.memory.schemas import ToolResult
+
 
 class FakeLLM:
     def __init__(self, responses: list[dict]):
@@ -103,3 +105,125 @@ def test_transparent_runtime_executes_tool_call_as_observation_then_continues(tm
     assert "observation" in event_types
     assert events[-2]["finalAnswer"] == "I found alpha marker in notes.md."
     assert "alpha marker is here" in json.dumps(llm.calls[-1], ensure_ascii=False)
+
+
+def test_transparent_runtime_reports_unknown_tool_and_continues(tmp_path: Path):
+    from app.agents.transparent_runtime import TransparentAgentRuntime
+
+    llm = FakeLLM(
+        [
+            {"answer": json.dumps(_planning_payload("execute"), ensure_ascii=False)},
+            {
+                "answer": "",
+                "tool_calls": [
+                    {
+                        "id": "call-unknown",
+                        "type": "function",
+                        "function": {
+                            "name": "github.repo_tree",
+                            "arguments": json.dumps({"repo": "openclaw/openclaw"}, ensure_ascii=False),
+                        },
+                    }
+                ],
+            },
+            {"answer": "我无法调用 github.repo_tree；当前需要改用可用工具继续确认。"},
+        ]
+    )
+    runtime = TransparentAgentRuntime(llm_client=llm, project_root=Path(__file__).resolve().parents[1], max_turns=3)
+
+    events = list(runtime.stream("看看 openclaw 默认工具", thread_id="thread-1", user_id="user-1"))
+    unknown_events = [
+        event
+        for event in events
+        if event.get("type") == "observation" and event.get("observation", {}).get("kind") == "unknown_tool_requested"
+    ]
+
+    assert unknown_events
+    assert unknown_events[0]["observation"]["tool"] == "github.repo_tree"
+    assert "local_search" in unknown_events[0]["observation"]["available_tools"]
+    assert "github.repo_tree" in llm.calls[-1]["prompt"]
+    assert "local_search" in llm.calls[-1]["prompt"]
+    assert events[-2]["type"] == "final_answer"
+
+
+def test_transparent_runtime_feeds_tool_failure_into_next_react_turn(monkeypatch, tmp_path: Path):
+    import app.agents.transparent_runtime as transparent_runtime
+
+    from app.agents.transparent_runtime import TransparentAgentRuntime
+
+    def fake_execute_tool(tool_name: str, arguments: dict) -> ToolResult:
+        return ToolResult(ok=False, source=tool_name, data={"url": arguments.get("url")}, error="HTTPError")
+
+    monkeypatch.setattr(transparent_runtime, "execute_tool", fake_execute_tool)
+    llm = FakeLLM(
+        [
+            {"answer": json.dumps(_planning_payload("execute"), ensure_ascii=False)},
+            {
+                "answer": "",
+                "tool_calls": [
+                    {
+                        "id": "call-fetch",
+                        "type": "function",
+                        "function": {
+                            "name": "web_fetch",
+                            "arguments": json.dumps({"url": "https://example.invalid"}, ensure_ascii=False),
+                        },
+                    }
+                ],
+            },
+            {"answer": "web_fetch 失败后我会换搜索或其他来源继续确认。"},
+        ]
+    )
+    runtime = TransparentAgentRuntime(llm_client=llm, project_root=Path(__file__).resolve().parents[1], max_turns=3)
+
+    events = list(runtime.stream("查一个网页", thread_id="thread-1", user_id="user-1"))
+
+    assert "HTTPError" in llm.calls[-1]["prompt"]
+    assert "revise" in llm.calls[-1]["prompt"].lower()
+    assert any(event.get("toolCall", {}).get("status") == "failed" for event in events)
+    assert events[-2]["finalAnswer"] == "web_fetch 失败后我会换搜索或其他来源继续确认。"
+
+
+def test_transparent_runtime_system_prompt_exposes_public_tool_failures(tmp_path: Path):
+    from app.agents.transparent_runtime import TransparentAgentRuntime
+
+    llm = FakeLLM([{"answer": json.dumps(_planning_payload("plan_only"), ensure_ascii=False)}])
+    runtime = TransparentAgentRuntime(llm_client=llm, project_root=Path(__file__).resolve().parents[1])
+    prompt = runtime._react_system_prompt(runtime.context_assembler.build())
+
+    assert "tool failures" in prompt.lower()
+    assert "Never expose internal error details" not in prompt
+    assert "secret" in prompt.lower()
+
+
+def test_transparent_runtime_max_turns_fallback_marks_unconfirmed(monkeypatch, tmp_path: Path):
+    import app.agents.transparent_runtime as transparent_runtime
+
+    from app.agents.transparent_runtime import TransparentAgentRuntime
+
+    monkeypatch.setattr(
+        transparent_runtime,
+        "execute_tool",
+        lambda tool_name, arguments: ToolResult(ok=False, source=tool_name, data={}, error="HTTPError"),
+    )
+    llm = FakeLLM(
+        [
+            {"answer": json.dumps(_planning_payload("execute"), ensure_ascii=False)},
+            {
+                "answer": "",
+                "tool_calls": [
+                    {
+                        "id": "call-fetch",
+                        "type": "function",
+                        "function": {"name": "web_fetch", "arguments": json.dumps({"url": "https://example.invalid"})},
+                    }
+                ],
+            },
+        ]
+    )
+    runtime = TransparentAgentRuntime(llm_client=llm, project_root=Path(__file__).resolve().parents[1], max_turns=1)
+
+    events = list(runtime.stream("查一个网页", thread_id="thread-1", user_id="user-1"))
+
+    assert events[-2]["type"] == "final_answer"
+    assert "未确认" in events[-2]["finalAnswer"] or "无法确认" in events[-2]["finalAnswer"]
