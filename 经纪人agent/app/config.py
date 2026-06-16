@@ -11,6 +11,7 @@ class Settings(BaseModel):
     data_dir: Path = Path("data")
     local_source_root: Path = PROJECT_ROOT
     memory_db_path: Path = Path("data/memory/agent_memory.sqlite3")
+    web_acquisition_db_path: Path = Path("data/web_acquisition/acquisition.sqlite3")
     hermes_memory_dir: Path = PROJECT_ROOT
     hermes_memory_char_limit: int = 2200
     hermes_user_char_limit: int = 1375
