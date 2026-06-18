@@ -59,3 +59,28 @@ def test_evidence_graph_does_not_score_rag_placeholder_as_citation(monkeypatch):
     assert result["rag_citations"] == []
     assert result["rag_status"]["status"] == "placeholder"
     assert result["evidence_score"]["citations"] == 0
+
+
+def test_local_candidates_do_not_skip_web_search(monkeypatch):
+    import app.agents.nodes.evidence_nodes as evidence_nodes
+
+    calls = []
+
+    def fake_execute(node_name, tool_name, arguments):
+        calls.append(tool_name)
+        if tool_name == "web_search":
+            return type("Result", (), {"ok": True, "data": {"results": []}, "error": None})()
+        return type("Result", (), {"ok": True, "data": {}, "error": None})()
+
+    monkeypatch.setattr(evidence_nodes, "execute_node_tool", fake_execute)
+    state = {
+        "local_candidates": [{"file_path": "local.md"}],
+        "product_name": "御享金越",
+        "user_input": "查询御享金越最新官方条款",
+        "source_observations": [],
+        "stop_reasons": [],
+    }
+
+    evidence_nodes.web_lead_search(state)
+
+    assert "web_search" in calls

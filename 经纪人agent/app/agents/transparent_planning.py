@@ -60,6 +60,33 @@ PUBLIC_PLANNING_SCHEMA = {
         },
         "execution_mode": {"type": "string", "enum": ["plan_only", "execute"]},
         "next_action": {"type": "string"},
+        "web_search_requirement": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["required", "conditional", "not_needed"]},
+                "freshness": {"type": "string"},
+                "risk_level": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+        },
+        "resource_context": {
+            "type": "object",
+            "required": ["resource_type", "location", "task_type"],
+            "properties": {
+                "resource_type": {"type": "string"},
+                "location": {"type": "string"},
+                "resource_id": {"type": "string"},
+                "canonical_url": {"type": "string"},
+                "package_registry": {"type": "string"},
+                "task_type": {"type": "string"},
+                "confidence": {"type": "number"},
+                "needs_external_fetch": {"type": "boolean"},
+                "local_search_recommended": {"type": "boolean"},
+                "primary_tools": {"type": "array", "items": {"type": "string"}},
+                "fallback_tools": {"type": "array", "items": {"type": "string"}},
+                "candidate_urls": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
 }
 

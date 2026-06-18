@@ -539,6 +539,14 @@ h2 {
   border-top: 1px solid rgba(255, 255, 255, 0.075);
 }
 
+.composer-actions,
+.queued-guidance-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .composer-tools {
   display: flex;
   align-items: center;
@@ -595,6 +603,73 @@ h2 {
   min-width: 92px;
   min-height: 38px;
   padding: 0 16px;
+}
+
+.queue-button,
+.stop-button,
+.queued-guidance button {
+  min-height: 38px;
+  padding: 0 14px;
+  color: #f5f6fa;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.queue-button {
+  background: var(--accent);
+}
+
+.stop-button {
+  background: rgba(165, 48, 55, 0.72);
+}
+
+.queue-button:disabled,
+.stop-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.queued-guidance {
+  width: min(100%, 760px);
+  display: grid;
+  gap: 10px;
+  align-self: center;
+  padding: 12px;
+  color: var(--ink);
+  background: rgba(28, 34, 50, 0.9);
+  border: 1px solid rgba(93, 142, 255, 0.34);
+  border-radius: 12px;
+}
+
+.queued-guidance > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.queued-guidance span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.queued-guidance textarea {
+  min-height: 64px;
+  resize: vertical;
+  padding: 10px;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.queued-guidance button {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.queued-guidance button:last-child {
+  background: var(--accent);
 }
 
 .send-button:not(:disabled) {

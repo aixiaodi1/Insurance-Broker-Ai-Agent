@@ -1,4 +1,4 @@
-import { Command, ImageIcon, Monitor, Paperclip, Send, Sparkles } from "lucide-react";
+import { Command, ImageIcon, Monitor, Paperclip, Send, Sparkles, Square } from "lucide-react";
 
 interface PromptComposerProps {
   prompt: string;
@@ -8,6 +8,9 @@ interface PromptComposerProps {
   onCommandModeChange: (mode: "plan" | "build") => void;
   onPromptChange: (prompt: string) => void;
   onRun: () => void;
+  onQueueGuidance: () => void;
+  onStop: () => void;
+  isStopping?: boolean;
 }
 
 const quickActions = [
@@ -24,9 +27,12 @@ export function PromptComposer({
   isRunning,
   onCommandModeChange,
   onPromptChange,
-  onRun
+  onRun,
+  onQueueGuidance,
+  onStop,
+  isStopping = false
 }: PromptComposerProps) {
-  const canRun = prompt.trim().length > 0 && !isRunning;
+  const canRun = prompt.trim().length > 0;
 
   return (
     <div
@@ -44,7 +50,11 @@ export function PromptComposer({
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              onRun();
+              if (isRunning) {
+                onQueueGuidance();
+              } else {
+                onRun();
+              }
             }
           }}
           placeholder="问我一个问题..."
@@ -75,10 +85,25 @@ export function PromptComposer({
               </button>
             </div>
           </div>
-          <button className="send-button" type="button" onClick={onRun} disabled={!canRun}>
-            <Send aria-hidden="true" size={17} />
-            {isRunning ? "发送中" : "发送"}
-          </button>
+          <div className="composer-actions">
+            {isRunning ? (
+              <>
+                <button className="queue-button" type="button" onClick={onQueueGuidance} disabled={!canRun}>
+                  <Send aria-hidden="true" size={17} />
+                  预提交
+                </button>
+                <button className="stop-button" type="button" onClick={onStop} disabled={isStopping}>
+                  <Square aria-hidden="true" size={15} />
+                  {isStopping ? "正在停止" : "终止"}
+                </button>
+              </>
+            ) : (
+              <button className="send-button" type="button" onClick={onRun} disabled={!canRun}>
+                <Send aria-hidden="true" size={17} />
+                发送
+              </button>
+            )}
+          </div>
         </div>
       </section>
 

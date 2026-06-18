@@ -1,23 +1,40 @@
 from __future__ import annotations
 
 import html
-import base64
+import json
 import re
 import shutil
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict
 from html.parser import HTMLParser
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from app.config import settings
 from app.memory.schemas import ToolResult
+from app.search.orchestrator import build_default_search_orchestrator
+from app.search.schemas import SearchRequest
+from app.search.safety import EgressGuard, PromptInjectionGuard
 
 
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".py", ".toml", ".yaml", ".yml"}
 ALLOWED_CLI = {"rg", "dir", "ls", "Get-ChildItem"}
+_SEARCH_ORIGINAL_QUESTION: ContextVar[str] = ContextVar("search_original_question", default="")
+
+
+@contextmanager
+def search_request_context(original_question: str):
+    token = _SEARCH_ORIGINAL_QUESTION.set(original_question)
+    try:
+        yield
+    finally:
+        _SEARCH_ORIGINAL_QUESTION.reset(token)
 
 
 def local_search(query: str, root: Path | str | None = None, limit: int = 8) -> ToolResult:
@@ -96,41 +113,74 @@ def run_cli(command: str, cwd: Path | str | None = None, timeout_seconds: int = 
 
 
 def web_search(query: str, limit: int = 5) -> ToolResult:
-    url = f"https://www.bing.com/search?q={quote_plus(query)}"
-    fetched = web_fetch(url, max_chars=160000)
-    if not fetched.ok:
-        return ToolResult(ok=False, source="web_search", data={"query": query, "results": []}, error=fetched.error)
-
-    results: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    for match in re.finditer(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', fetched.data.get("raw_html", ""), re.I | re.S):
-        result_url = _normalize_result_url(_unwrap_bing_url(html.unescape(match.group(1))))
-        if not result_url or result_url in seen_urls:
-            continue
-        seen_urls.add(result_url)
-        results.append(
-            {
-                "title": _clean_text(match.group(2)),
-                "url": result_url,
-            }
-        )
-        if len(results) >= limit:
-            break
-    return ToolResult(ok=True, source="web_search", data={"query": query, "results": results, "content_kind": "search_results"})
+    original_question = _SEARCH_ORIGINAL_QUESTION.get() or query
+    response = build_default_search_orchestrator().search(
+        SearchRequest(original_question=original_question, query_goal=query if query != original_question else "", limit=limit)
+    )
+    return ToolResult(
+        ok=bool(response.results),
+        source="web_search",
+        data={
+            "query": response.query,
+            "provider_used": response.provider_used,
+            "fallback_used": response.fallback_used,
+            "results": [asdict(item) for item in response.results],
+            "errors": response.errors,
+            "content_kind": response.content_kind,
+            "degradation": response.degradation,
+            "provider_statuses": response.provider_statuses,
+            "public_trace": response.public_trace,
+            "search_plan": asdict(response.plan) if response.plan is not None else None,
+        },
+        error=None if response.results else "no_search_results",
+    )
 
 
 def web_fetch(url: str, max_chars: int = 4000) -> ToolResult:
+    egress = EgressGuard().validate_url(url)
+    if not egress.allowed:
+        return ToolResult(ok=False, source="web_fetch", data={"url": url, "failure_category": "egress_blocked"}, error=egress.reason)
     try:
         request = Request(url, headers={"User-Agent": "Mozilla/5.0 insurance-agent-research/0.1"})
         with urlopen(request, timeout=10) as response:
             content_type = response.headers.get("content-type", "")
             body = response.read(max_chars * 4)
+    except HTTPError as exc:
+        if exc.code in (401, 403) or 500 <= exc.code <= 599:
+            scraped = _firecrawl_scrape(url, max_chars)
+            if scraped is not None:
+                return scraped
+        return ToolResult(
+            ok=False,
+            source="web_fetch",
+            data={"url": url, "status_code": exc.code, "failure_category": _http_failure_category(exc.code)},
+            error=f"http_{exc.code}",
+        )
+    except URLError:
+        scraped = _firecrawl_scrape(url, max_chars)
+        if scraped is not None:
+            return scraped
+        return ToolResult(ok=False, source="web_fetch", data={"url": url, "failure_category": "network_failure"}, error="network_error")
     except Exception as exc:  # pragma: no cover - network failures vary by environment.
-        return ToolResult(ok=False, source="web_fetch", data={"url": url}, error=type(exc).__name__)
+        return ToolResult(ok=False, source="web_fetch", data={"url": url, "failure_category": "fetch_error"}, error=type(exc).__name__)
 
     text = body.decode("utf-8", errors="ignore")
     is_html = "html" in content_type
     plain_text = _clean_text(_html_to_text(_strip_non_content_html(text))) if is_html else text[:max_chars]
+    injection_report = PromptInjectionGuard().scan(plain_text)
+    if injection_report.suspected:
+        return ToolResult(
+            ok=False,
+            source="web_fetch",
+            data={
+                "url": url,
+                "domain": urlparse(url).netloc,
+                "content_kind": "quarantined_external_content",
+                "untrusted_external_content": True,
+                "risk_flags": injection_report.flags,
+            },
+            error="prompt_injection_blocked",
+        )
     return ToolResult(
         ok=True,
         source="web_fetch",
@@ -141,6 +191,65 @@ def web_fetch(url: str, max_chars: int = 4000) -> ToolResult:
             "content_kind": "webpage_text" if is_html else "raw_text",
             "text": plain_text[:max_chars],
             "raw_html": text[:max_chars],
+            "untrusted_external_content": True,
+            "risk_flags": injection_report.flags,
+        },
+    )
+
+
+def _firecrawl_scrape(url: str, max_chars: int) -> ToolResult | None:
+    if not settings.firecrawl_api_key or not settings.firecrawl_scrape_endpoint:
+        return None
+    payload = json.dumps({"url": url, "formats": ["markdown"], "onlyMainContent": True}).encode("utf-8")
+    request = Request(
+        settings.firecrawl_scrape_endpoint,
+        data=payload,
+        headers={"Authorization": f"Bearer {settings.firecrawl_api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    content = data.get("data")
+    if data.get("success") is not True or not isinstance(content, dict):
+        return None
+    text = str(content.get("markdown") or content.get("content") or "").strip()
+    if not text:
+        return None
+    metadata = content.get("metadata") if isinstance(content.get("metadata"), dict) else {}
+    injection_report = PromptInjectionGuard().scan(text)
+    if injection_report.suspected:
+        return ToolResult(
+            ok=False,
+            source="web_fetch",
+            data={
+                "url": url,
+                "domain": urlparse(url).netloc,
+                "content_kind": "quarantined_external_content",
+                "extraction_provider": "firecrawl_scrape",
+                "untrusted_external_content": True,
+                "risk_flags": injection_report.flags,
+            },
+            error="prompt_injection_blocked",
+        )
+    return ToolResult(
+        ok=True,
+        source="web_fetch",
+        data={
+            "url": url,
+            "domain": urlparse(url).netloc,
+            "title": str(metadata.get("title") or ""),
+            "content_type": "text/markdown",
+            "content_kind": "webpage_text",
+            "text": text[:max_chars],
+            "raw_html": "",
+            "extraction_provider": "firecrawl_scrape",
+            "untrusted_external_content": True,
+            "risk_flags": injection_report.flags,
         },
     )
 
@@ -221,30 +330,14 @@ def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text))).strip()
 
 
-def _normalize_result_url(url: str) -> str:
-    if not url:
-        return ""
-    parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
-        return ""
-    normalized = parsed._replace(fragment="").geturl()
-    return normalized.rstrip("/")
-
-
-def _unwrap_bing_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.netloc not in {"www.bing.com", "bing.com"} or "/ck/" not in parsed.path:
-        return url
-    encoded = parse_qs(parsed.query).get("u", [""])[0]
-    if not encoded:
-        return url
-    if encoded.startswith("a1"):
-        encoded = encoded[2:]
-    try:
-        padding = "=" * (-len(encoded) % 4)
-        return base64.urlsafe_b64decode(encoded + padding).decode("utf-8", errors="ignore")
-    except Exception:
-        return unquote(encoded)
+def _http_failure_category(status_code: int) -> str:
+    if status_code == 404:
+        return "not_found"
+    if status_code in (401, 403):
+        return "access_denied"
+    if 500 <= status_code <= 599:
+        return "remote_server_error"
+    return "http_error"
 
 
 class _TextExtractor(HTMLParser):

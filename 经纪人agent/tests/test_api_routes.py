@@ -66,7 +66,7 @@ def test_research_route_uses_transparent_mainline(tmp_path, monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/agent/research",
-        json={"user_id": "user-1", "thread_id": "thread-1", "message": "show me the process"},
+        json={"user_id": "user-1", "thread_id": "thread-1", "message": "plan only: show me the process"},
     )
 
     assert response.status_code == 200
@@ -76,9 +76,8 @@ def test_research_route_uses_transparent_mainline(tmp_path, monkeypatch):
     assert body["evidence_score"] is None
     assert "我先不执行工具" in body["final_summary"]
     trace_types = [event["type"] for event in body["workflow_trace"]]
-    assert "context_loaded" in trace_types
-    assert "intent_anchor" in trace_types
-    assert "task_decomposition" in trace_types
+    assert "goal_anchored" in trace_types
+    assert "plan_updated" in trace_types
     assert "novice_intake" not in trace_types
     assert "rag_citation_check" not in trace_types
 
@@ -149,17 +148,16 @@ def test_research_stream_route_returns_transparent_process_events(monkeypatch):
     with client.stream(
         "POST",
         "/agent/research/stream",
-        json={"user_id": "user-1", "thread_id": "thread-1", "message": "show process"},
+        json={"user_id": "user-1", "thread_id": "thread-1", "message": "plan only: show process"},
     ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
     assert [event["type"] for event in events] == [
         "run_started",
-        "context_loaded",
-        "intent_anchor",
-        "task_decomposition",
+        "goal_anchored",
+        "plan_updated",
         "final_answer",
         "run_finished",
     ]
-    assert events[2]["intent"]["real_blocker"] == "The old route hid intent and task decomposition"
+    assert events[1]["goal"]["goal"] == "Understand the user request transparently"

@@ -1,6 +1,6 @@
 export type AgentApiMode = "mock" | "real";
 
-export type AgentRunStatus = "idle" | "running" | "succeeded" | "failed" | "awaiting_approval";
+export type AgentRunStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted" | "awaiting_approval";
 
 export type AgentNodeStatus = "pending" | "running" | "succeeded" | "failed";
 
@@ -80,6 +80,15 @@ export interface AgentApprovalRequest {
 
 export type AgentStreamEventType =
   | "run_started"
+  | "goal_anchored"
+  | "plan_updated"
+  | "action_started"
+  | "action_completed"
+  | "recovery_started"
+  | "guidance_queued"
+  | "guidance_applied"
+  | "interrupt_requested"
+  | "run_interrupted"
   | "context_loaded"
   | "intent_anchor"
   | "task_decomposition"
@@ -99,6 +108,7 @@ export interface AgentStreamEvent {
   type: AgentStreamEventType;
   timestamp?: string;
   summary?: string;
+  runId?: string;
   run?: AgentRun;
   finalAnswer?: string;
   approvalRequest?: AgentApprovalRequest;

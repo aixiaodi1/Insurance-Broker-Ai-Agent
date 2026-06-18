@@ -35,15 +35,14 @@ describe("POST /api/agent/run", () => {
     const body = await response.json();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      new URL("http://127.0.0.1:8000/agent/run_v2"),
+      new URL("http://127.0.0.1:8000/agent/research"),
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: "帮我查众民保官方资料",
-          agentId: "website-demo",
-          threadId: "thread-1",
-          vectorProvider: "chroma"
+          user_id: "default",
+          thread_id: "thread-1",
+          message: "帮我查众民保官方资料"
         })
       })
     );

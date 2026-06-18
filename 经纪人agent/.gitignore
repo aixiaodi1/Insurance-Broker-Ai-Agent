@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.env
+.env.local
+.env.*.local
 
 data/**/*.sqlite3
 data/runs/**/events.jsonl

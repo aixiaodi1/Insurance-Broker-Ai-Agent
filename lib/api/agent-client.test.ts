@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentRun, streamAgentRun } from "./agent-client";
+import {
+  createAgentRun,
+  deleteRunGuidance,
+  interruptAgentRun,
+  streamAgentRun,
+  upsertRunGuidance
+} from "./agent-client";
 
 const input = {
   prompt: "为什么先检索资料？",
@@ -129,6 +135,28 @@ describe("createAgentRun", () => {
     expect(events).toEqual(["run_started", "thinking", "run_finished"]);
     expect(run.finalAnswer).toBe("stream answer");
 
+    vi.unstubAllGlobals();
+  });
+
+  it("sends interrupt and editable guidance through run control proxies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await upsertRunGuidance("run-1", "补充内容", "normal");
+    await upsertRunGuidance("run-1", "立即纠偏", "immediate");
+    await deleteRunGuidance("run-1");
+    await interruptAgentRun("run-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/agent/runs/run-1/guidance",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ content: "补充内容", priority: "normal" }) })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/agent/runs/run-1/control",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "interrupt" }) })
+    );
     vi.unstubAllGlobals();
   });
 });

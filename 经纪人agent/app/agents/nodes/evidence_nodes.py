@@ -46,8 +46,6 @@ def local_evidence_search(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def web_lead_search(state: dict[str, Any]) -> dict[str, Any]:
-    if state.get("local_candidates"):
-        return state
     if not settings.enable_web_search:
         state["web_leads"] = []
         state["stop_reasons"].append(

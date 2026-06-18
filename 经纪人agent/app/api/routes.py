@@ -7,6 +7,7 @@ from starlette.responses import StreamingResponse
 from typing import Literal
 
 from app.agents.transparent_runtime import TransparentAgentRuntime
+from app.agents.run_control import RunControlStore
 from app.config import PROJECT_ROOT, settings
 from app.memory.hermes import HermesMemoryStore
 from app.memory.llm import build_memory_extractor_from_settings
@@ -23,6 +24,15 @@ class ResearchRequest(BaseModel):
     user_id: str
     message: str
     thread_id: str | None = None
+
+
+class RunControlRequest(BaseModel):
+    action: Literal["interrupt"]
+
+
+class RunGuidanceRequest(BaseModel):
+    content: str
+    priority: Literal["normal", "immediate"] = "normal"
 
 
 class MemoryActionRequest(BaseModel):
@@ -54,6 +64,39 @@ def _web_acquisition_store() -> SQLiteAcquisitionStore:
     store = SQLiteAcquisitionStore(settings.web_acquisition_db_path)
     store.init_schema()
     return store
+
+
+def _run_control_store() -> RunControlStore:
+    store = RunControlStore(settings.memory_db_path)
+    store.init_schema()
+    return store
+
+
+@router.post("/agent/runs/{run_id}/control")
+def control_agent_run(run_id: str, request: RunControlRequest) -> dict:
+    store = _run_control_store()
+    if not store.request_interrupt(run_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return {"run_id": run_id, "action": request.action, "status": "requested"}
+
+
+@router.put("/agent/runs/{run_id}/guidance")
+def upsert_agent_guidance(run_id: str, request: RunGuidanceRequest) -> dict:
+    content = request.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Guidance content is required")
+    guidance = _run_control_store().upsert_guidance(run_id, content, request.priority)
+    if guidance is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return {"run_id": run_id, "guidance": guidance}
+
+
+@router.delete("/agent/runs/{run_id}/guidance")
+def delete_agent_guidance(run_id: str) -> dict:
+    store = _run_control_store()
+    if store.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return {"run_id": run_id, "deleted": store.delete_guidance(run_id)}
 
 
 @router.post("/web-acquisition/run")
@@ -118,7 +161,11 @@ def research_stream(request: ResearchRequest) -> StreamingResponse:
             ) + "\n"
             return
 
-        runtime = TransparentAgentRuntime(llm_client=llm_client, project_root=PROJECT_ROOT)
+        runtime = TransparentAgentRuntime(
+            llm_client=llm_client,
+            project_root=PROJECT_ROOT,
+            control_store=_run_control_store(),
+        )
         for event in runtime.stream(
             request.message,
             thread_id=request.thread_id,
@@ -161,7 +208,11 @@ def _run_transparent_research(request: ResearchRequest) -> dict:
             "memory_citations": [],
         }
 
-    runtime = TransparentAgentRuntime(llm_client=llm_client, project_root=PROJECT_ROOT)
+    runtime = TransparentAgentRuntime(
+        llm_client=llm_client,
+        project_root=PROJECT_ROOT,
+        control_store=_run_control_store(),
+    )
     events = list(runtime.stream(request.message, thread_id=thread_id, user_id=request.user_id))
     final_summary = _final_summary_from_events(events)
     run_id = _run_id_from_events(events) or session_id
@@ -202,7 +253,16 @@ def _run_id_from_events(events: list[dict]) -> str | None:
 def _visible_steps_from_events(events: list[dict]) -> list[dict]:
     visible = []
     for event in events:
-        if event.get("type") in {"intent_anchor", "task_decomposition", "tool_boundary", "tool_started", "tool_finished", "observation"}:
+        if event.get("type") in {
+            "goal_anchored",
+            "plan_updated",
+            "action_started",
+            "action_completed",
+            "recovery_started",
+            "guidance_applied",
+            "interrupt_requested",
+            "run_interrupted",
+        }:
             visible.append(
                 {
                     "type": event.get("type"),

@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { streamAgentRun } from "@/lib/api/agent-client";
+import {
+  deleteRunGuidance,
+  interruptAgentRun,
+  streamAgentRun,
+  upsertRunGuidance
+} from "@/lib/api/agent-client";
 import type { AgentApprovalRequest, AgentRun, AgentSession, AgentStreamEvent, CitationInfo } from "@/lib/types/agent";
 import {
   appendRunToSession,
@@ -149,6 +154,13 @@ function eventSummary(event?: AgentStreamEvent): string | undefined {
   if (event.type === "intent_anchor") {
     return asDisplayString(event.intent?.["user_goal"] ?? event.summary);
   }
+  if (event.type === "goal_anchored") {
+    const goal = (event as AgentStreamEvent & { goal?: Record<string, unknown> }).goal;
+    return asDisplayString(goal?.["goal"] ?? event.summary);
+  }
+  if (event.type === "plan_updated") {
+    return event.summary ?? "已更新计划";
+  }
   if (event.type === "task_decomposition") {
     const tasks = event.taskDecomposition?.["ordered_tasks"];
     if (Array.isArray(tasks)) {
@@ -180,6 +192,15 @@ function asDisplayString(value: unknown): string | undefined {
 function eventLabel(event: AgentStreamEvent): string {
   const labels: Record<AgentStreamEvent["type"], string> = {
     run_started: "开始",
+    goal_anchored: "目标",
+    plan_updated: "计划",
+    action_started: "行动",
+    action_completed: "结果",
+    recovery_started: "恢复",
+    guidance_queued: "补充",
+    guidance_applied: "已纠偏",
+    interrupt_requested: "停止",
+    run_interrupted: "已终止",
     context_loaded: "上下文",
     intent_anchor: "意图",
     task_decomposition: "拆解",
@@ -209,6 +230,9 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
   const [prompt, setPrompt] = useState("");
   const [commandMode, setCommandMode] = useState<"plan" | "build">("plan");
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [activeBackendRunId, setActiveBackendRunId] = useState<string | undefined>();
+  const [queuedGuidance, setQueuedGuidance] = useState<string | undefined>();
   const [hasLoadedSessions, setHasLoadedSessions] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
@@ -305,6 +329,12 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
         {
           mode: "real",
           onEvent: (event) => {
+            if (event.runId) {
+              setActiveBackendRunId(event.runId);
+            }
+            if (event.type === "guidance_applied") {
+              setQueuedGuidance(undefined);
+            }
             setSessions((current) =>
               current.map((session) =>
                 session.id === activeSession.id ? updateRunEvents(session, pendingRun.id, event) : session
@@ -331,7 +361,50 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
       setErrorMessage(error instanceof Error ? error.message : "请求失败");
     } finally {
       setIsRunning(false);
+      setIsStopping(false);
+      setActiveBackendRunId(undefined);
     }
+  }
+
+  async function handleQueueGuidance() {
+    const content = prompt.trim();
+    if (!content || !activeBackendRunId) {
+      return;
+    }
+    await upsertRunGuidance(activeBackendRunId, content, "normal");
+    setQueuedGuidance(content);
+    setPrompt("");
+  }
+
+  async function handleImmediateGuidance() {
+    const content = queuedGuidance?.trim();
+    if (!content || !activeBackendRunId) {
+      return;
+    }
+    await upsertRunGuidance(activeBackendRunId, content, "immediate");
+  }
+
+  async function handleGuidanceBlur() {
+    const content = queuedGuidance?.trim();
+    if (content && activeBackendRunId) {
+      await upsertRunGuidance(activeBackendRunId, content, "normal");
+    }
+  }
+
+  async function handleDeleteGuidance() {
+    if (!activeBackendRunId) {
+      return;
+    }
+    await deleteRunGuidance(activeBackendRunId);
+    setQueuedGuidance(undefined);
+  }
+
+  async function handleStop() {
+    if (!activeBackendRunId || isStopping) {
+      return;
+    }
+    setIsStopping(true);
+    await interruptAgentRun(activeBackendRunId);
   }
 
   async function handleApproveCommand() {
@@ -505,6 +578,25 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
           </section>
         )}
 
+        {isRunning && queuedGuidance !== undefined ? (
+          <section className="queued-guidance" aria-label="待应用的补充">
+            <div>
+              <strong>待应用的补充</strong>
+              <span>下一次 ReAct 决策前自动加入</span>
+            </div>
+            <textarea
+              aria-label="编辑预提交内容"
+              value={queuedGuidance}
+              onBlur={handleGuidanceBlur}
+              onChange={(event) => setQueuedGuidance(event.target.value)}
+            />
+            <div className="queued-guidance-actions">
+              <button type="button" onClick={handleDeleteGuidance}>撤回</button>
+              <button type="button" onClick={handleImmediateGuidance}>立即提交</button>
+            </div>
+          </section>
+        ) : null}
+
         <PromptComposer
           commandMode={commandMode}
           isAnchored={hasConversation}
@@ -513,6 +605,9 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
           onCommandModeChange={setCommandMode}
           onPromptChange={setPrompt}
           onRun={handleRun}
+          onQueueGuidance={handleQueueGuidance}
+          onStop={handleStop}
+          isStopping={isStopping}
         />
       </section>
 

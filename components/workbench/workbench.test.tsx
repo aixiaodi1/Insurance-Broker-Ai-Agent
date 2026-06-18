@@ -216,6 +216,40 @@ describe("AgentWorkbench", () => {
     expect(await screen.findByText("stream done")).toBeInTheDocument();
   });
 
+  it("keeps the composer usable for guidance and turns the primary action into stop", async () => {
+    let resolveRun: ((run: ReturnType<typeof getInitialMockRun>) => void) | undefined;
+    vi.spyOn(agentClient, "streamAgentRun").mockImplementation(async (_input, options) => {
+      options.onEvent?.({ type: "run_started", runId: "run-live", summary: "started" });
+      return await new Promise((resolve) => {
+        resolveRun = resolve;
+      });
+    });
+    const guidanceSpy = vi.spyOn(agentClient, "upsertRunGuidance").mockResolvedValue({});
+    const interruptSpy = vi.spyOn(agentClient, "interruptAgentRun").mockResolvedValue({});
+    render(<AgentWorkbench initialRun={getInitialMockRun()} />);
+    const textbox = screen.getByLabelText("输入消息") as HTMLTextAreaElement;
+
+    fireEvent.change(textbox, { target: { value: "开始任务" } });
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "终止" })).toBeInTheDocument();
+
+    fireEvent.change(textbox, { target: { value: "重点检查 ReAct loop" } });
+    fireEvent.click(screen.getByRole("button", { name: "预提交" }));
+    expect(await screen.findByText("待应用的补充")).toBeInTheDocument();
+    expect(guidanceSpy).toHaveBeenCalledWith("run-live", "重点检查 ReAct loop", "normal");
+
+    fireEvent.click(screen.getByRole("button", { name: "立即提交" }));
+    expect(guidanceSpy).toHaveBeenLastCalledWith("run-live", "重点检查 ReAct loop", "immediate");
+    fireEvent.click(screen.getByRole("button", { name: "终止" }));
+    expect(interruptSpy).toHaveBeenCalledWith("run-live");
+
+    const run = getInitialMockRun();
+    run.id = "run-live";
+    run.status = "interrupted";
+    run.finalAnswer = "";
+    resolveRun?.(run);
+  });
+
   it("does not repeat the final answer in the process summary", () => {
     const run = getInitialMockRun();
     run.finalAnswer = "unique final answer";

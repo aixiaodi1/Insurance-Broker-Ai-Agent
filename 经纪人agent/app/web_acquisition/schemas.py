@@ -4,8 +4,17 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-StrategyName = Literal["auto", "http_only", "playwright_only", "browser_use_only", "harness_only"]
-StrategyUsed = Literal["http", "playwright", "browser_use", "harness", "none"]
+StrategyName = Literal[
+    "auto",
+    "http_only",
+    "playwright_only",
+    "mobile_browser_only",
+    "site_discovery_only",
+    "search_recovery_only",
+    "browser_use_only",
+    "harness_only",
+]
+StrategyUsed = Literal["http", "playwright", "mobile_browser", "site_discovery", "search_recovery", "browser_use", "harness", "none"]
 
 
 @dataclass(slots=True)
