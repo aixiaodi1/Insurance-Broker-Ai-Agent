@@ -8,7 +8,10 @@ from app.web_acquisition.browser_use_fetcher import BrowserUseAgentFetcher
 from app.web_acquisition.config import WebAcquisitionConfig
 from app.web_acquisition.harness import HarnessRunner, SiteHarnessRegistry
 from app.web_acquisition.http_fetcher import FastHttpFetcher
+from app.web_acquisition.mobile_browser_fetcher import MobileLightBrowserFetcher
 from app.web_acquisition.playwright_fetcher import PlaywrightFetcher
+from app.web_acquisition.search_recovery_fetcher import SearchRecoveryFetcher
+from app.web_acquisition.site_discovery_fetcher import SiteDiscoveryFetcher
 from app.web_acquisition.schemas import AcquisitionError, AcquisitionResult, AcquisitionStep, StrategyName
 from app.web_acquisition.storage import SQLiteAcquisitionStore
 
@@ -20,6 +23,9 @@ class WebAcquisitionService:
         config: WebAcquisitionConfig | None = None,
         http_fetcher: Any | None = None,
         playwright_fetcher: Any | None = None,
+        mobile_browser_fetcher: Any | None = None,
+        site_discovery_fetcher: Any | None = None,
+        search_recovery_fetcher: Any | None = None,
         browser_use_fetcher: Any | None = None,
         harness_runner: Any | None = None,
     ) -> None:
@@ -28,6 +34,9 @@ class WebAcquisitionService:
         self.config = config or WebAcquisitionConfig()
         self.http_fetcher = http_fetcher or FastHttpFetcher(config=self.config)
         self.playwright_fetcher = playwright_fetcher or PlaywrightFetcher(config=self.config)
+        self.mobile_browser_fetcher = mobile_browser_fetcher or MobileLightBrowserFetcher(PlaywrightFetcher(config=self.config))
+        self.site_discovery_fetcher = site_discovery_fetcher or SiteDiscoveryFetcher(candidate_fetcher=FastHttpFetcher(config=self.config))
+        self.search_recovery_fetcher = search_recovery_fetcher or SearchRecoveryFetcher(candidate_fetcher=FastHttpFetcher(config=self.config))
         self.browser_use_fetcher = browser_use_fetcher or BrowserUseAgentFetcher(config=self.config)
         self.harness_runner = harness_runner or HarnessRunner(SiteHarnessRegistry())
 
@@ -61,7 +70,15 @@ class WebAcquisitionService:
     ) -> AcquisitionResult:
         if strategy == "auto":
             final_result: AcquisitionResult | None = None
-            for fetcher in (self.http_fetcher, self.playwright_fetcher, self.browser_use_fetcher, self.harness_runner):
+            for fetcher in (
+                self.http_fetcher,
+                self.playwright_fetcher,
+                self.mobile_browser_fetcher,
+                self.site_discovery_fetcher,
+                self.search_recovery_fetcher,
+                self.browser_use_fetcher,
+                self.harness_runner,
+            ):
                 final_result = await self._fetch(fetcher, url, goal, allowed_domains)
                 if final_result.success:
                     return final_result
@@ -72,6 +89,9 @@ class WebAcquisitionService:
         fetcher = {
             "http_only": self.http_fetcher,
             "playwright_only": self.playwright_fetcher,
+            "mobile_browser_only": self.mobile_browser_fetcher,
+            "site_discovery_only": self.site_discovery_fetcher,
+            "search_recovery_only": self.search_recovery_fetcher,
             "browser_use_only": self.browser_use_fetcher,
             "harness_only": self.harness_runner,
         }.get(strategy)

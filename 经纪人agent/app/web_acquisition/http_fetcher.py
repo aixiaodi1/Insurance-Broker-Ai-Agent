@@ -9,6 +9,7 @@ from app.web_acquisition.extractor import Extractor
 from app.web_acquisition.quality import score_quality
 from app.web_acquisition.schemas import AcquisitionError, AcquisitionResult, AcquisitionStep, FetchResponse
 from app.web_acquisition.security import SecurityGate, SecurityViolation
+from app.search.safety import PromptInjectionGuard
 
 
 class FastHttpFetcher:
@@ -22,6 +23,7 @@ class FastHttpFetcher:
         self.security_gate = security_gate or SecurityGate(max_redirects=self.config.max_redirects)
         self.transport = transport or self._default_transport
         self.extractor = Extractor()
+        self.prompt_guard = PromptInjectionGuard()
 
     def fetch(self, url: str, goal: str, allowed_domains: list[str] | None = None) -> AcquisitionResult:
         started = perf_counter()
@@ -64,6 +66,34 @@ class FastHttpFetcher:
 
         text = response.body.decode("utf-8", errors="ignore")
         extracted = self.extractor.extract_html(text, response.final_url) if content_type == "text/html" else self.extractor.extract_text(text, response.final_url)
+        injection_report = self.prompt_guard.scan(extracted.text)
+        if injection_report.suspected:
+            steps.append(
+                AcquisitionStep(
+                    layer="security",
+                    action="scan_prompt_injection",
+                    description="Scanned untrusted external content for prompt injection indicators",
+                    url_after=response.final_url,
+                    metadata={"risk_flags": injection_report.flags, "untrusted_external_content": True},
+                )
+            )
+            return AcquisitionResult(
+                success=False,
+                input_url=url,
+                final_url=response.final_url,
+                strategy_used="http",
+                redirect_chain=response.redirect_chain,
+                steps=steps,
+                errors=[
+                    AcquisitionError(
+                        code="prompt_injection_blocked",
+                        message="External content was quarantined before model use",
+                        layer="security",
+                        url=response.final_url,
+                    )
+                ],
+                duration_ms=self._duration(started),
+            )
         quality = score_quality(extracted, threshold=self.config.quality_success_threshold)
         errors = []
         if quality.should_escalate:

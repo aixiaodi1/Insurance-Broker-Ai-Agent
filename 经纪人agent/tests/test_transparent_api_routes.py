@@ -42,20 +42,19 @@ def test_research_stream_route_returns_transparent_process_events(monkeypatch):
     with client.stream(
         "POST",
         "/agent/research/stream",
-        json={"user_id": "user-1", "thread_id": "thread-1", "message": "show process"},
+        json={"user_id": "user-1", "thread_id": "thread-1", "message": "plan only: show process"},
     ) as response:
         assert response.status_code == 200
         events = [json.loads(line) for line in response.iter_lines() if line]
 
     assert [event["type"] for event in events] == [
         "run_started",
-        "context_loaded",
-        "intent_anchor",
-        "task_decomposition",
+        "goal_anchored",
+        "plan_updated",
         "final_answer",
         "run_finished",
     ]
-    assert events[2]["intent"]["real_blocker"] == "The agent flow is opaque"
+    assert events[1]["goal"]["goal"] == "See the process"
 
 
 def test_research_stream_route_reports_missing_llm_configuration(monkeypatch):

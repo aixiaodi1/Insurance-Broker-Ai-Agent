@@ -139,7 +139,7 @@ NEXT_PUBLIC_AGENT_API_MODE=real
 AGENT_API_BASE_URL=http://localhost:8000
 ```
 
-注意：当前 Next.js 代理文件仍保留早期 `/agent/run_v2` 路径。后端当前主线接口是 `/agent/research` 和 `/agent/research/stream`。真实联调前需要先确认或更新代理路径。
+Next.js 代理已统一连接新主线 `/agent/research` 和 `/agent/research/stream`。端口 `8000` 必须从 `经纪人agent` 目录启动；旧 `rag-backend /agent/run_v2` 不再是前端默认主线。
 
 ## 运行后端
 

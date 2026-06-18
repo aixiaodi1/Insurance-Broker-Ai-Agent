@@ -330,6 +330,40 @@ export async function streamAgentRun(
   return finalRun;
 }
 
+async function runControlRequest(path: string, init: RequestInit): Promise<unknown> {
+  const response = await fetch(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) }
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new AgentRunError("运行控制请求失败", response.status, payload);
+  }
+  return payload;
+}
+
+export function interruptAgentRun(runId: string): Promise<unknown> {
+  return runControlRequest(`/api/agent/runs/${runId}/control`, {
+    method: "POST",
+    body: JSON.stringify({ action: "interrupt" })
+  });
+}
+
+export function upsertRunGuidance(
+  runId: string,
+  content: string,
+  priority: "normal" | "immediate"
+): Promise<unknown> {
+  return runControlRequest(`/api/agent/runs/${runId}/guidance`, {
+    method: "PUT",
+    body: JSON.stringify({ content, priority })
+  });
+}
+
+export function deleteRunGuidance(runId: string): Promise<unknown> {
+  return runControlRequest(`/api/agent/runs/${runId}/guidance`, { method: "DELETE" });
+}
+
 function parseStreamEvent(line: string): unknown {
   if (!line.trim()) {
     return undefined;
@@ -348,6 +382,7 @@ function normalizeStreamEvent(value: unknown): AgentStreamEvent {
   const event = value as unknown as AgentStreamEvent;
   return {
     ...event,
+    runId: typeof value.run_id === "string" ? value.run_id : event.runId,
     run: event.run ? normalizeAgentRun(event.run) : undefined,
     approvalRequest: normalizeApprovalRequest(event.approvalRequest)
   };
